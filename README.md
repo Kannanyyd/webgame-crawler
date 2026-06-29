@@ -40,7 +40,7 @@ playwright install chromium   # 首次运行也可由工具自动安装
 
 ```bash
 # 命令行参数
-python game_grabber.py https://www.crazygames.com/game/find-the-cow-lqn
+python game_grabber.py <游戏页面 URL>
 
 # 或交互式输入
 python game_grabber.py
@@ -56,6 +56,11 @@ python -m http.server 8080
 # 浏览器打开工具输出的 URL(如 http://localhost:8080/<game>/index.html)
 ```
 
+## 已知问题
+
+- 部分平台子域有 Cloudflare 防护,直接访问 headless 浏览器会被拦截;从平台主站入口加载可绕过
+- CDN 资源带 Referer 防盗链,工具会自动用拦截到的 referer 注入请求头
+- 部分平台的 gameframe 是外壳,真实游戏在另一域名/子域的 iframe 里,工具会自动识别真实游戏 frame
 
 ## 目录结构
 
@@ -67,4 +72,19 @@ webgame-crawler/
 └── .gitignore
 ```
 
+抓取后的资源结构示例:
+
 ```
+<游戏名>/
+└── <game-slug>/
+    └── <version>/
+        ├── index.html
+        └── assets/
+            ├── bundle-a/
+            ├── bundle-b/
+            └── ...
+```
+
+## 注意事项
+
+本工具仅供学习与个人使用,抓取的资源请遵守目标平台的用户协议与版权规定。使用者需自行承担相关法律责任。

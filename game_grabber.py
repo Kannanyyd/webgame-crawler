@@ -5,8 +5,8 @@
     python game_grabber.py                    # 交互式输入
 
 示例:
-    python game_grabber.py https://www.crazygames.com/game/find-the-cow-lqn
-    python game_grabber.py https://files.crazygames.com/find-the-cow-lqn/22/index.html
+    python game_grabber.py https://example.com/game/your-game-slug
+    python game_grabber.py https://cdn.example.com/your-game/1/index.html
 
 工作流程:
 1. 启动 headless 浏览器加载游戏页面
@@ -332,8 +332,7 @@ def collect_game_resources(url):
         print(f"      游戏名: {game_name}")
 
         # 找真实游戏 frame(优先 files./cdn./含 index.html 的)
-        # CrazyGames 的 gameframe(games.crazygames.com)只是外壳,
-        # 真实游戏在 files.crazygames.com 的另一个 iframe 里
+        # 部分平台用 gameframe 外壳,真实游戏在另一个域名的 iframe 里
         print(f"\n[2/5] 模拟交互触发动态资源加载...")
         frames = page.frames
         game_frame = None
@@ -431,7 +430,7 @@ def collect_game_resources(url):
         # 浏览器拦截已经覆盖,这里不做额外处理
 
     # 通用兜底:扫描所有拦截到的 JS 文件,提取明文资源路径
-    # 适用于纯 HTML5/Phaser/PixiJS/Three.js/arrow-escape-puzzle 这种无清单引擎
+    # 适用于纯 HTML5/Phaser/PixiJS/Three.js 等无清单引擎
     if js_urls_intercepted:
         base_for_scan = game_frame_url if game_frame_url else url
         print(f"      → 通用兜底:扫描 {len(js_urls_intercepted)} 个 JS 文件提取资源路径")
