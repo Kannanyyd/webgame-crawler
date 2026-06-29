@@ -56,18 +56,6 @@ python -m http.server 8080
 # 浏览器打开工具输出的 URL(如 http://localhost:8080/<game>/index.html)
 ```
 
-## 已测试的游戏
-
-| 游戏 | 平台 | 引擎 | 资源数 | 本地运行 |
-|------|------|------|------|------|
-| Find The Cow | CrazyGames | Cocos Creator | 126 | ✅ 130 请求全 200 |
-| Arrow Escape: Puzzle | CrazyGames | HTML5 + Canvas | 6 | ✅ 15 请求全 200 |
-
-## 已知问题
-
-- CrazyGames 部分子域有 Cloudflare 防护,直接访问会被拦截;从主站入口 `https://www.crazygames.com/game/<slug>` 加载可绕过
-- CDN 资源带 Referer 防盗链,工具会自动用拦截到的 referer 注入请求头
-- CrazyGames 的 `games.crazygames.com` 是 gameframe 外壳,真实游戏在 `*.game-files.crazygames.com` 的 iframe 里,工具会自动识别真实游戏 frame
 
 ## 目录结构
 
@@ -79,17 +67,4 @@ webgame-crawler/
 └── .gitignore
 ```
 
-抓取后的资源结构示例:
-
-```
-Find the cow/
-└── find-the-cow-lqn/
-    └── 22/
-        ├── index.html
-        └── assets/
-            ├── cowGame/
-            ├── lobby/
-            ├── resources/
-            ├── internal/
-            └── main/
 ```
