@@ -315,6 +315,54 @@ def parse_cocos_manifest(game_frame_url, referer, captured):
     return new_urls
 
 
+def parse_unity_index(game_frame_url, referer, captured):
+    """
+    Unity WebGL 专属:解析 index.html 里的 createUnityInstance config 对象,
+    拿到 dataUrl/frameworkUrl/codeUrl 等资源路径。
+    Unity 加载 wasm 时用流式 fetch,URL 可能被浏览器拦截器截断,
+    所以必须直接解析 index.html 的 config 对象。
+    返回新发现的 URL -> referer 字典。
+    """
+    new_urls = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Referer": referer,
+    }
+    try:
+        r = requests.get(game_frame_url, headers=headers, timeout=30)
+        if r.status_code != 200:
+            return new_urls
+        html = r.text
+        base = game_frame_url.rsplit("/", 1)[0]
+        # 匹配 config = { ... } 对象
+        m = re.search(r'config\s*=\s*\{([^}]+)\}', html)
+        if not m:
+            return new_urls
+        config_body = m.group(1)
+        # 提取所有 "xxxUrl": "path" 或 xxxUrl: "path" 键值对
+        for kv in re.finditer(r'(\w*Url)\s*:\s*["\']([^"\']+)["\']', config_body):
+            rel_path = kv.group(2)
+            # 拼成绝对 URL(相对 game_frame_url)
+            full = urljoin(game_frame_url + "/", rel_path)
+            if full not in captured and full not in new_urls:
+                new_urls[full] = referer
+        # 也提取 loaderUrl(UnityLoader 加载器)
+        for kv in re.finditer(r'(loaderUrl|buildUrl)\s*[:=]\s*["\']([^"\']+)["\']', html):
+            rel_path = kv.group(2)
+            if rel_path not in ("Build", "buildUrl"):
+                full = urljoin(game_frame_url + "/", rel_path)
+                if full not in captured and full not in new_urls:
+                    new_urls[full] = referer
+        # streamingAssetsUrl 也可能指向资源目录
+        for kv in re.finditer(r'(streamingAssetsUrl)\s*:\s*["\']([^"\']+)["\']', html):
+            # 这是目录路径,不直接下载,留给浏览器拦截
+            pass
+    except Exception:
+        pass
+    return new_urls
+
+
 def collect_game_resources(url):
     """启动浏览器加载游戏,拦截所有资源请求"""
     from playwright.sync_api import sync_playwright
@@ -493,8 +541,11 @@ def collect_game_resources(url):
         if engine == "cocos":
             print(f"      → Cocos Creator:解析 settings.js + 各 bundle config.json")
             extra.update(parse_cocos_manifest(game_frame_url, referer_for_extra, captured))
-        # Unity WebGL 也有 Build/*.json 清单,但通常 UnityLoader 启动时就会全部加载,
-        # 浏览器拦截已经覆盖,这里不做额外处理
+        elif engine == "unity":
+            # Unity WebGL:解析 index.html 的 createUnityInstance config 对象
+            # (浏览器拦截 wasm 流式请求时 URL 可能截断,需直接解析)
+            print(f"      → Unity WebGL:解析 index.html 的 config 对象")
+            extra.update(parse_unity_index(game_frame_url, referer_for_extra, captured))
 
     # 通用兜底:扫描所有拦截到的 JS 文件,提取明文资源路径
     # 适用于纯 HTML5/Phaser/PixiJS/Three.js 等无清单引擎
