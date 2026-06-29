@@ -83,10 +83,31 @@ def is_website_ui_path(url):
         "/assets/client~",      # 网站应用代码 chunk
         "/cdn-cgi/image/",       # Cloudflare 图片处理
         "/_next/static/",        # Next.js 网站静态资源
+        "/_next/data/",         # Next.js 数据路由
         "/static/assets/",       # 通用网站打包
-        "/assets/client~app",    # 网站应用组件
+        "/assets/client~app",   # 网站应用组件
+        "/aboutpage/",           # 平台 about 页资源
+        "/playlists/",           # 播放列表 UI
+        "/icons/",               # 网站 UI 图标(评分星、播放叠加层等)
     )
     return any(p in url for p in ui_patterns)
+
+
+def is_api_endpoint(url):
+    """判断是否为 API/追踪/分析端点(非资源文件,下载必失败)。"""
+    api_patterns = (
+        "/graphql", "/api/", "/_guard/", "/collect",
+        "/analytics", "/tracking", "/telemetry",
+        "/sdk.js",                   # 平台 SDK 脚本(Yandex/Poki 等)
+        "/realtime", "/leaderboard", "/payments",
+    )
+    # 网站分析域名
+    api_domains = (
+        "gd-website-api.", "msgrt.", "tag.atom.",
+        "hlana.", "counter.", "pixel.",
+    )
+    return any(p in url.lower() for p in api_patterns) or \
+           any(d in url.lower() for d in api_domains)
 
 
 def slugify(name):
@@ -177,6 +198,11 @@ def detect_engine(page, game_frame):
         if target.query_selector("script[src*='UnityLoader']") or \
            target.query_selector("canvas[id*='unity']"):
             return "unity"
+        # Construct 3: c3runtime.js / c3main.js
+        if target.query_selector("script[src*='c3runtime']") or \
+           target.query_selector("script[src*='c3main']") or \
+           target.query_selector("script[src*='preview.js']"):
+            return "construct"
     except Exception:
         pass
 
@@ -384,6 +410,9 @@ def collect_game_resources(url):
         # 拦截所有请求,记录 URL 和 referer
         # 不限制资源类型,因为游戏引擎可能用 fetch/XHR 加载 .json/.png 等
         def on_request(request):
+            # 跳过主文档导航请求(页面 HTML 本身,不是资源)
+            if request.resource_type == "document":
+                return
             u = request.url.split("?")[0]
             if u not in captured:
                 captured[u] = request.headers.get("referer", "")
@@ -420,6 +449,12 @@ def collect_game_resources(url):
             "button:has-text('Play')", "a:has-text('Play')",
             "[data-test='play-button']", ".play-button", "#play-button",
             "button[aria-label*='lay']", ".game-button",
+            # itch.io 用 "Run game" 文案 + .play_btn / watch_btn 类名
+            "a:has-text('Run game')", "a.play_btn", "a.watch_btn",
+            "button.watch_btn", "[data-action='play_game']",
+            # Newgrounds 用 "Play Game!" / "Play Movie!" 文案
+            "a:has-text('Play Game')", "a:has-text('Play Movie')",
+            "a[data-href*='play']", ".play_link",
         ]:
             try:
                 el = page.query_selector(sel)
@@ -457,7 +492,8 @@ def collect_game_resources(url):
                 fu = f.url.lower()
                 if not fu or fu == "about:blank":
                     continue
-                if any(k in fu for k in ("files.", "cdn.", "gdn.", "games.", "/game-files/")):
+                if any(k in fu for k in ("files.", "cdn.", "gdn.", "games.", "/game-files/",
+                                         "ungrounded.net", "itch.zone", "html5.")):
                     game_frame = f
                     game_frame_url = f.url
                     break
@@ -582,6 +618,9 @@ def collect_game_resources(url):
                 # 排除明显的网站 UI 打包路径(避免抓网站外壳资源)
                 if is_website_ui_path(u):
                     continue
+                # 排除 API/追踪端点(下载必失败,无意义)
+                if is_api_endpoint(u):
+                    continue
                 filtered[u] = ref
     else:
         # 没找到游戏 frame,用黑名单过滤
@@ -598,6 +637,8 @@ def collect_game_resources(url):
             if any(d in u for d in blocked_domains):
                 continue
             if is_website_ui_path(u):
+                continue
+            if is_api_endpoint(u):
                 continue
             filtered[u] = ref
 

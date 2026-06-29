@@ -20,12 +20,24 @@
 |------|------|
 | Cocos Creator | 解析 `src/settings.js` + 各 bundle 的 `config.json` |
 | Egret | 解析 `resource/default.res.json` |
-| Unity WebGL | UnityLoader 启动时浏览器拦截覆盖 |
+| Unity WebGL | 解析 `index.html` 的 `createUnityInstance` config 对象 |
+| Construct 3 | JS 字符串扫描兜底(`c3runtime.js` 特征识别) |
 | Phaser / PixiJS / Three.js / Babylon.js | JS 字符串扫描兜底 |
 | CreateJS / Laya / Hilo / PlayCanvas | JS 字符串扫描兜底 |
 | 纯 HTML5 + Canvas | JS 字符串扫描兜底 |
 
 **兜底策略**:对所有引擎,扫描拦截到的 JS 文件,正则提取 `.png/.mp3/.json/.wasm` 等资源路径。即使 JS 被混淆,字符串数组本身是明文,能提取出资源路径。
+
+## 平台兼容性
+
+| 平台 | 兼容性 | 说明 |
+|------|------|------|
+| 多数主流平台 | ✅ 完全兼容 | 资源抓取完整,本地可零失败运行 |
+| Yandex Games | ✅ 完全兼容 | 支持 Unity WebGL brotli 压缩资源 |
+| Poki | ✅ 完全兼容 | 自动点击 Play 按钮,跨子域资源白名单 |
+| GameDistribution | ✅ 完全兼容 | Construct 3 引擎识别 + 资源完整抓取 |
+| itch.io | ⚠️ 受限 | 平台对 headless 浏览器有反爬,游戏按钮不渲染,需真实浏览器环境 |
+| Newgrounds | ⚠️ 受限 | 有 `_guard` 反爬验证 + headless 检测,部分游戏无法抓取 |
 
 ## 安装
 
