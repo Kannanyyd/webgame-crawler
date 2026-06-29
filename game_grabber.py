@@ -56,6 +56,39 @@ def ensure_browser():
         )
 
 
+def root_domain(host):
+    """提取根域(简化版,处理常见多段 TLD)。
+    用于跨子域白名单过滤 —— 比如游戏 frame 在 games.poki.com,
+    但真实资源在 xxx.gdn.poki.com,两者根域都是 poki.com,应一并保留。
+    """
+    if not host:
+        return ""
+    parts = host.split(".")
+    if len(parts) <= 2:
+        return host
+    # 常见多段 TLD(国家二级 + 通用 TLD)
+    multi_tld = ("co.uk", "co.jp", "com.cn", "com.au", "co.kr",
+                 "com.br", "com.tw", "co.in", "com.sg")
+    last_two = ".".join(parts[-2:])
+    if last_two in multi_tld and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def is_website_ui_path(url):
+    """判断是否为明显的网站 UI 打包路径(非游戏资源)。
+    比如网站外壳的 React/Vue 打包 chunk、CDN 图片处理接口。
+    """
+    ui_patterns = (
+        "/assets/client~",      # 网站应用代码 chunk
+        "/cdn-cgi/image/",       # Cloudflare 图片处理
+        "/_next/static/",        # Next.js 网站静态资源
+        "/static/assets/",       # 通用网站打包
+        "/assets/client~app",    # 网站应用组件
+    )
+    return any(p in url for p in ui_patterns)
+
+
 def slugify(name):
     """把游戏名转成安全的目录名"""
     # 去掉 emoji 和非基本字符
@@ -332,46 +365,63 @@ def collect_game_resources(url):
         # 找真实游戏 frame(优先 files./cdn./含 index.html 的)
         # 部分平台用 gameframe 外壳,真实游戏在另一个域名的 iframe 里
         print(f"\n[2/5] 模拟交互触发动态资源加载...")
+
+        # 先尝试点击 "Play" 按钮 —— 很多平台点击后才加载游戏本体到 iframe
+        play_clicked = False
+        for sel in [
+            "button:has-text('Play')", "a:has-text('Play')",
+            "[data-test='play-button']", ".play-button", "#play-button",
+            "button[aria-label*='lay']", ".game-button",
+        ]:
+            try:
+                el = page.query_selector(sel)
+                if el:
+                    el.scroll_into_view_if_needed(timeout=2000)
+                    page.wait_for_timeout(400)
+                    el.click(timeout=3000)
+                    print(f"      ✓ 点击 Play 按钮")
+                    play_clicked = True
+                    break
+            except Exception:
+                continue
+        if play_clicked:
+            page.wait_for_timeout(9000)  # 等游戏本体加载(部分平台游戏 frame 延迟出现)
+
+        # 重新获取 frame 列表(点 Play 后可能新增游戏 frame)
         frames = page.frames
         game_frame = None
-        # 优先级 1:files./cdn. 域名(真实游戏 CDN)
+        # 优先级 1:含 index.html 的 frame(真实游戏本体,而非入口 wrapper)
         for f in frames:
             if f == page.main_frame:
                 continue
             fu = f.url.lower()
-            if not fu:
+            if not fu or fu == "about:blank" or "doubleclick" in fu or "google" in fu:
                 continue
-            if "files." in fu or "cdn." in fu:
+            if "index.html" in fu:
                 game_frame = f
                 game_frame_url = f.url
                 break
-        # 优先级 2:含 index.html 的(任何域名,排除明显广告)
+        # 优先级 2:游戏 CDN 关键字(files/cdn/gdn/games/game-files)
         if not game_frame:
             for f in frames:
                 if f == page.main_frame:
                     continue
                 fu = f.url.lower()
-                if not fu or "doubleclick" in fu or "google" in fu:
+                if not fu or fu == "about:blank":
                     continue
-                if "index.html" in fu:
+                if any(k in fu for k in ("files.", "cdn.", "gdn.", "games.", "/game-files/")):
                     game_frame = f
                     game_frame_url = f.url
                     break
-        # 优先级 3:任何非主页面的 frame
+        # 优先级 3:任何非主页面且非 about:blank 的 frame
         if not game_frame:
             for f in frames:
-                if f != page.main_frame and f.url and "doubleclick" not in f.url.lower():
+                fu = f.url.lower() if f.url else ""
+                if f != page.main_frame and fu and fu != "about:blank" \
+                   and "doubleclick" not in fu:
                     game_frame = f
                     game_frame_url = f.url
                     break
-        # 优先级 4:主页面本身有 canvas
-        if not game_frame:
-            try:
-                if page.query_selector("canvas"):
-                    game_frame = page
-                    game_frame_url = page.url
-            except Exception:
-                pass
 
         if game_frame_url:
             print(f"      游戏 frame: {game_frame_url[:100]}")
@@ -400,6 +450,25 @@ def collect_game_resources(url):
         # 等待动态资源加载
         print(f"      等待动态资源加载(20 秒)...")
         page.wait_for_timeout(20000)
+
+        # 再次更新 frame 列表(canvas 点击/等待后可能再触发新游戏 frame)
+        # 即使已找到 frame,如果发现含 index.html 的更优 frame,也更新
+        # (例如 Poki 先出现 games.poki.com 入口,后才出现 xxx.gdn.poki.com/.../index.html 真实本体)
+        frames = page.frames
+        better_frame = None
+        for f in frames:
+            if f == page.main_frame:
+                continue
+            fu = f.url.lower() if f.url else ""
+            if not fu or fu == "about:blank":
+                continue
+            if "index.html" in fu:
+                better_frame = f
+                break
+        if better_frame:
+            game_frame = better_frame
+            game_frame_url = better_frame.url
+            print(f"      更新为真实游戏本体 frame: {game_frame_url[:100]}")
 
         # [3/5] 引擎识别 + 引擎专属补抓
         print(f"\n[3/5] 识别游戏引擎...")
@@ -451,11 +520,17 @@ def collect_game_resources(url):
     # 3. 如果游戏 frame 没找到,退回到黑名单过滤(保留所有非追踪域)
     filtered = {}
     if game_frame_url:
-        main_host_for_filter = urlparse(game_frame_url).netloc
+        # 同根域白名单:游戏 frame 的根域 + 同根域的资源都保留
+        # 比如游戏 frame 在 games.poki.com,资源在 xxx.gdn.poki.com,
+        # 两者根域都是 poki.com,应一并保留
+        game_root = root_domain(urlparse(game_frame_url).netloc)
         for u, ref in captured.items():
             if not u.startswith("http"):
                 continue
-            if urlparse(u).netloc == main_host_for_filter:
+            if root_domain(urlparse(u).netloc) == game_root:
+                # 排除明显的网站 UI 打包路径(避免抓网站外壳资源)
+                if is_website_ui_path(u):
+                    continue
                 filtered[u] = ref
     else:
         # 没找到游戏 frame,用黑名单过滤
@@ -471,16 +546,18 @@ def collect_game_resources(url):
                 continue
             if any(d in u for d in blocked_domains):
                 continue
+            if is_website_ui_path(u):
+                continue
             filtered[u] = ref
 
-    # 推断主域:优先用游戏 frame URL 的 host
+    # 推断主域:优先用游戏 frame URL 的 host(决定本地保存路径的根)
     if game_frame_url:
         main_host = urlparse(game_frame_url).netloc
         print(f"\n      游戏 CDN 主域: {main_host}")
     else:
         main_host = urlparse(url).netloc
 
-    print(f"      总捕获资源: {len(filtered)} 个(已过滤第三方追踪)")
+    print(f"      总捕获资源: {len(filtered)} 个(已过滤第三方追踪和网站 UI)")
     return filtered, game_name, main_host
 
 
