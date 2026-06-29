@@ -1,0 +1,27 @@
+# 依赖与缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pw-browsers/
+
+# 抓取的游戏资源(每次运行都会生成,不入库)
+Find the cow/
+Find The Cow/
+Arrow escape_ puzzle/
+Arrow_escape_puzzle/
+game/
+_external/
+
+# 失败列表/日志
+_failed.txt
+*.log
+
+# 本地配置(含 API Key)
+.env
+.env.local
+
+# 临时文件
+*.tmp
+*.bak
