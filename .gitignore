@@ -7,11 +7,9 @@ venv/
 .pw-browsers/
 
 # 抓取的游戏资源(每次运行都会生成,不入库)
-Find the cow/
-Find The Cow/
-Arrow escape_ puzzle/
-Arrow_escape_puzzle/
-game/
+# 游戏目录名来自页面 title,无法预知,统一忽略大写开头的目录
+*/
+!webgame-crawler/
 _external/
 
 # 失败列表/日志

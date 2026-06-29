@@ -60,13 +60,11 @@ def slugify(name):
     """把游戏名转成安全的目录名"""
     # 去掉 emoji 和非基本字符
     name = name.encode("ascii", "ignore").decode("ascii")
-    # 去掉常见网站后缀
-    for suffix in ["play on crazygames", "play on poki", "play on y8",
-                   " - play free online games", " | crazygames", " | poki"]:
-        if suffix in name.lower():
-            name = name.lower().replace(suffix, "").strip()
-            name = name[0].upper() + name[1:] if name else name
-    # 去掉常见分隔符后的部分
+    # 去掉 "play on <平台>" 这类网站后缀(通用,不硬编码平台名)
+    name = re.sub(r'\s*play\s+on\s+\w+.*$', '', name, flags=re.IGNORECASE)
+    # 去掉 "play free online games" 这类宣传语
+    name = re.sub(r'\s*[-|]?\s*play\s+free\s+online\s+games.*$', '', name, flags=re.IGNORECASE)
+    # 去掉 " | <平台>" 这类带分隔符的后缀
     for sep in ["|", "-", "–", "—", "::"]:
         if sep in name:
             name = name.split(sep)[0].strip()
@@ -467,7 +465,7 @@ def collect_game_resources(url):
                            "amazon-adsystem.com", "pubmatic.com", "openx.net", "rubiconproject.com",
                            "adsrvr.org", "adnxs.com", "quantserve.com", "bidswitch.net",
                            "tapad.com", "moatads.com", "adlightning.com", "contextweb.com",
-                           "3lift.com", "casalemedia.com", "rlcdn.com", "imgs.crazygames.com")
+                           "3lift.com", "casalemedia.com", "rlcdn.com")
         for u, ref in captured.items():
             if not u.startswith("http"):
                 continue
