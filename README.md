@@ -1,102 +1,69 @@
 # Webgame Crawler
 
-网页游戏资源抓取工具。输入游戏页面 URL,自动抓取所有游戏资源到本地,保持原目录结构,游戏可直接本地运行。
+输入一个能够正常打开并进入游戏界面的网页链接，脚本会通过真实浏览器观察 frame、canvas、请求发起关系和资源流量，识别实际游戏上下文，并保存初始可玩界面所需的静态资源。
 
-## 工作原理
+## 核心原则
 
-```
-1. 启动 headless 浏览器加载游戏页面
-2. 拦截所有网络请求,收集返回 200 的资源 URL 和 referer
-3. 自动点击 canvas 触发动态资源加载
-4. 识别游戏引擎,按引擎特征补抓资源
-5. 从 HTML <title> 或 URL 推断游戏名,创建同名目录
-6. 用拦截到的 referer 批量下载所有资源
-7. 保持原目录结构,游戏本地可直接运行
-```
+- 不按平台域名写死规则。
+- 不把第一个 iframe 当成游戏。
+- 不要求资源和游戏页面属于同一个根域。
+- 完整保留查询参数、Cookie、Referer、Authorization 等请求上下文。
+- 支持 HTTP 200、完整 206、Brotli/Gzip 原始压缩资源。
+- 浏览器网络捕获为主，引擎清单解析用于补充未立即加载的资源。
 
-## 支持的游戏引擎
-
-| 引擎 | 资源补抓策略 |
-|------|------|
-| Cocos Creator | 解析 `src/settings.js` + 各 bundle 的 `config.json` |
-| Egret | 解析 `resource/default.res.json` |
-| Unity WebGL | 解析 `index.html` 的 `createUnityInstance` config 对象 |
-| Construct 3 | JS 字符串扫描兜底(`c3runtime.js` 特征识别) |
-| Phaser / PixiJS / Three.js / Babylon.js | JS 字符串扫描兜底 |
-| CreateJS / Laya / Hilo / PlayCanvas | JS 字符串扫描兜底 |
-| 纯 HTML5 + Canvas | JS 字符串扫描兜底 |
-
-**兜底策略**:对所有引擎,扫描拦截到的 JS 文件,正则提取 `.png/.mp3/.json/.wasm` 等资源路径。即使 JS 被混淆,字符串数组本身是明文,能提取出资源路径。
-
-## 平台兼容性
-
-| 平台 | 兼容性 | 说明 |
-|------|------|------|
-| 多数主流平台 | ✅ 完全兼容 | 资源抓取完整,本地可零失败运行 |
-| Yandex Games | ✅ 完全兼容 | 支持 Unity WebGL brotli 压缩资源 |
-| Poki | ✅ 完全兼容 | 自动点击 Play 按钮,跨子域资源白名单 |
-| GameDistribution | ✅ 完全兼容 | Construct 3 引擎识别 + 资源完整抓取 |
-| itch.io | ⚠️ 受限 | 平台对 headless 浏览器有反爬,游戏按钮不渲染,需真实浏览器环境 |
-| Newgrounds | ⚠️ 受限 | 有 `_guard` 反爬验证 + headless 检测,部分游戏无法抓取 |
+首批覆盖 Unity WebGL、Construct、Cocos Creator、LayaAir 和通用 HTML5 游戏。
 
 ## 安装
 
-```bash
-git clone https://github.com/Kannanyyd/webgame-crawler.git
-cd webgame-crawler
+建议使用 Python 3.11 或更高版本：
+
+```powershell
 pip install -r requirements.txt
-playwright install chromium   # 首次运行也可由工具自动安装
+python -m playwright install chromium
 ```
 
 ## 使用
 
-```bash
-# 命令行参数
-python game_grabber.py <游戏页面 URL>
-
-# 或交互式输入
-python game_grabber.py
+```powershell
+python game_grabber.py "https://example.com/game"
 ```
 
-运行后会在当前目录下创建以游戏名命名的目录,所有资源都保存在里面。
+也可以直接运行脚本后交互式输入 URL。
 
-## 本地运行抓下来的游戏
+输出目录使用页面标题命名：
 
-```bash
-cd "<游戏名>"
-python -m http.server 8080
-# 浏览器打开工具输出的 URL(如 http://localhost:8080/<game>/index.html)
+```text
+<game-name>/
+  ...下载的资源...
+  _external/<host>/...
+  _crawl/resource-map.json
+  _crawl/summary.json
+  _crawl/failures.json
 ```
 
-## 已知问题
+`summary.json` 会分别记录：
 
-- 部分平台子域有 Cloudflare 防护,直接访问 headless 浏览器会被拦截;从平台主站入口加载可绕过
-- CDN 资源带 Referer 防盗链,工具会自动用拦截到的 referer 注入请求头
-- 部分平台的 gameframe 是外壳,真实游戏在另一域名/子域的 iframe 里,工具会自动识别真实游戏 frame
+- 浏览器捕获请求数；
+- 选中的游戏 frame、引擎和置信分；
+- 纳入、排除、成功及失败资源数；
+- 实际保存的压缩字节；
+- 服务器声明的已知解压字节。
 
-## 目录结构
+因此 Unity `.br` 游戏不会再把约 28MB 的压缩传输量和约 70MB 的解压资源量混为一谈。
 
-```
-webgame-crawler/
-├── game_grabber.py      # 主程序
-├── requirements.txt
-├── README.md
-└── .gitignore
-```
+## 测试
 
-抓取后的资源结构示例:
+确定性测试不访问外网：
 
-```
-<游戏名>/
-└── <game-slug>/
-    └── <version>/
-        ├── index.html
-        └── assets/
-            ├── bundle-a/
-            ├── bundle-b/
-            └── ...
+```powershell
+py -3.12 -m unittest discover -s tests -v
 ```
 
-## 注意事项
+测试覆盖广告 iframe 误判、跨域 CDN、签名查询参数、Cookie、206、压缩字节、Unity、Construct、Cocos、Laya 和通用 HTML5 资源格式。
 
-本工具仅供学习与个人使用,抓取的资源请遵守目标平台的用户协议与版权规定。使用者需自行承担相关法律责任。
+## 限制
+
+- 工具不会绕过登录、验证码、付费、DRM 或访问控制。
+- 初始界面没有请求且清单没有声明的后续关卡资源无法凭空发现。
+- 多人联机、排行榜、支付等服务端功能仍需要原始后台。
+- 请遵守目标站点的用户协议、授权范围和相关法律。
