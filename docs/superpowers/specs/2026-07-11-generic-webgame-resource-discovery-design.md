@@ -296,4 +296,3 @@ The redesign is accepted when:
 6. Cross-domain, signed-query, cookie, and 206 fixtures download successfully.
 7. The CLI remains compatible with `python game_grabber.py <url>`.
 8. Failures are visible in reports; no critical discovery or download exception is silently discarded.
-
