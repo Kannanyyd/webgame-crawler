@@ -12,6 +12,7 @@ from webgame_crawler.models import ResourceRecord
 
 class _DownloadHandler(BaseHTTPRequestHandler):
     raw_br = b"not-decoded-brotli-bytes"
+    flaky_attempts = 0
 
     def log_message(self, *_):
         pass
@@ -44,6 +45,13 @@ class _DownloadHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/asset.data.br":
             self._send(self.raw_br, headers={"Content-Encoding": "br"})
+            return
+        if self.path == "/flaky.bin":
+            type(self).flaky_attempts += 1
+            if type(self).flaky_attempts == 1:
+                self._send(b"retry", status=503)
+            else:
+                self._send(b"recovered")
             return
         self._send(b"missing", status=404)
 
@@ -111,6 +119,17 @@ class DownloadTests(unittest.TestCase):
             self.assertNotEqual(first, second)
             self.assertEqual(first.read_bytes(), b"variant-one")
             self.assertEqual(second.read_bytes(), b"variant-two")
+
+    def test_download_retries_transient_server_failure(self):
+        _DownloadHandler.flaky_attempts = 0
+        resource = ResourceRecord(url=self.base + "/flaky.bin", status=200)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary = download_resources(
+                [resource], [], Path(temp_dir), self.host, max_workers=1
+            )
+
+        self.assertEqual(summary.failed, 0)
+        self.assertEqual(_DownloadHandler.flaky_attempts, 2)
 
 
 if __name__ == "__main__":

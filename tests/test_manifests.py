@@ -94,6 +94,20 @@ class ManifestTests(unittest.TestCase):
                 "https://game.example/scripts/assets/level.json?version=2",
             ],
         )
+        self.assertTrue(all(not record.required for record in supplemented))
+
+    def test_rejects_bare_extensions_and_javascript_diagnostics(self):
+        text = """
+        '.mp3' '.js' 'build.wasm'
+        'Detected deprecated API. Refer to https://docs.unity3d.com/manual/info.html#api\n'
+        ')) { const value = broken; } weird.bundle.js'
+        """
+
+        urls = extract_resource_urls(
+            text, "https://cdn.example.com/Build/loader.js", engine="unity"
+        )
+
+        self.assertEqual(urls, {"https://cdn.example.com/Build/build.wasm"})
 
 
 if __name__ == "__main__":

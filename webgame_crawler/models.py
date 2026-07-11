@@ -18,6 +18,7 @@ class ResourceRecord:
     encoded_size: int = 0
     failure: str | None = None
     discovery_method: str = "browser"
+    required: bool = True
     local_path: str | None = None
 
 
@@ -61,6 +62,7 @@ class DownloadResult:
     status: int | None = None
     error: str | None = None
     skipped: bool = False
+    required: bool = True
 
 
 @dataclass(slots=True)
@@ -78,6 +80,10 @@ class DownloadSummary:
     @property
     def failed(self) -> int:
         return sum(1 for result in self.results if not result.ok)
+
+    @property
+    def required_failed(self) -> int:
+        return sum(1 for result in self.results if not result.ok and result.required)
 
     @property
     def encoded_bytes(self) -> int:

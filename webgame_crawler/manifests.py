@@ -29,12 +29,28 @@ def _has_resource_extension(reference: str) -> bool:
     return path.endswith(GAME_EXTENSIONS)
 
 
+def _valid_reference(reference: str) -> bool:
+    if len(reference) > 2_048 or any(char in reference for char in "\r\n\t{}();"):
+        return False
+    lowered = reference.lower()
+    for scheme in ("http://", "https://"):
+        position = lowered.find(scheme)
+        if position > 0:
+            return False
+    filename = urlparse(reference).path.rsplit("/", 1)[-1].lower()
+    if filename in GAME_EXTENSIONS:
+        return False
+    return True
+
+
 def extract_resource_urls(text: str, source_url: str, engine: str = "unknown") -> set[str]:
     del engine  # Extension coverage is shared; engine detection determines which sources are scanned.
     urls: set[str] = set()
     for match in QUOTED_VALUE_RE.finditer(text):
         reference = _clean_reference(match.group("value"))
         if not reference or reference.startswith(("data:", "blob:", "javascript:", "#")):
+            continue
+        if not _valid_reference(reference):
             continue
         if not _has_resource_extension(reference):
             continue
@@ -87,6 +103,7 @@ def supplement_resources(
                     frame_ancestors=source.frame_ancestors,
                     request_headers=headers,
                     discovery_method=f"manifest:{engine}",
+                    required=False,
                 )
             )
     return supplemented

@@ -112,8 +112,46 @@ class CliTests(unittest.TestCase):
         self.assertEqual(report["included"], 2)
         self.assertEqual(report["downloaded"], 1)
         self.assertEqual(report["failed"], 1)
+        self.assertEqual(report["requiredFailed"], 1)
         self.assertEqual(report["encodedBytes"], 10)
         self.assertEqual(report["knownDecodedBytes"], 20)
+
+    def test_run_does_not_fail_when_only_optional_resource_is_missing(self):
+        capture = self._capture()
+
+        def capture_func(*_args, **_kwargs):
+            return capture
+
+        def download_func(resources, _cookies, output_dir, _main_host, **_kwargs):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return DownloadSummary(
+                results=[
+                    DownloadResult(
+                        url=resources[0].url,
+                        ok=True,
+                        bytes_written=10,
+                        status=200,
+                    ),
+                    DownloadResult(
+                        url="https://cdn.example/template.wasm",
+                        ok=False,
+                        status=404,
+                        error="HTTP 404",
+                        required=False,
+                    ),
+                ]
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            exit_code = game_grabber.run(
+                capture.requested_url,
+                output_root=Path(temp_dir),
+                capture_func=capture_func,
+                download_func=download_func,
+                printer=lambda *_: None,
+            )
+
+        self.assertEqual(exit_code, 0)
 
     def test_safe_print_falls_back_when_console_cannot_encode_unicode(self):
         stream = _GBKLikeStream()

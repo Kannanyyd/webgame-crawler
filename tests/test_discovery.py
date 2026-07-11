@@ -23,6 +23,24 @@ class DiscoveryTests(unittest.TestCase):
         self.assertTrue(is_tracking_url(ad_url))
         self.assertFalse(is_tracking_url(game_url))
 
+    def test_generic_adtech_hosts_are_tracking_without_portal_rules(self):
+        urls = [
+            "https://fafvertizing.example/prebid.js",
+            "https://ats-wrapper.privacymanager.io/ats.js",
+            "https://invstatic.creativecdn.com/encrypted.js",
+            "https://tags.crwdcntrl.net/pixel.js",
+            "https://oa.openxcdn.net/esp.js",
+        ]
+
+        self.assertTrue(all(is_tracking_url(url) for url in urls))
+
+    def test_google_ad_quality_and_consent_hosts_are_tracking(self):
+        self.assertTrue(is_tracking_url("https://ep1.adtrafficquality.google/ping"))
+        self.assertTrue(
+            is_tracking_url("https://fundingchoicesmessages.google.com/init")
+        )
+        self.assertFalse(is_tracking_url("https://fonts.gstatic.com/font.woff2"))
+
     def test_canvas_frame_with_large_binary_traffic_beats_ad_frame(self):
         ad_url = (
             "https://cm.g.doubleclick.net/partnerpixels?"
@@ -93,6 +111,22 @@ class DiscoveryTests(unittest.TestCase):
                 "https://cdn.vendor.net/assets/data.bin?part=2",
             ],
         )
+
+    def test_portal_without_canvas_or_engine_is_not_a_game_context(self):
+        portal = FrameSnapshot(url="https://portal.example/game")
+        resources = [
+            ResourceRecord(
+                url="https://portal.example/app.js",
+                resource_type="script",
+                frame_url=portal.url,
+                status=200,
+                encoded_size=20_000_000,
+            )
+        ]
+
+        selected = select_game_frames(build_frame_signals([portal], resources))
+
+        self.assertEqual(selected, [])
 
 
 if __name__ == "__main__":

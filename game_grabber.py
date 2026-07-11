@@ -119,11 +119,12 @@ def run(
     summary = write_reports(capture, resources, downloads, output_dir)
     printer(
         f"Downloaded={summary['downloaded']} Failed={summary['failed']} "
+        f"Required failed={summary['requiredFailed']} "
         f"Encoded={summary['encodedBytes'] / 1024 / 1024:.2f} MB "
         f"Known decoded={summary['knownDecodedBytes'] / 1024 / 1024:.2f} MB"
     )
     printer(f"Output: {output_dir}")
-    return 1 if downloads.failed else 0
+    return 1 if downloads.required_failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -5,9 +5,12 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .discovery import (
+    GAME_EXTENSIONS,
     build_frame_signals,
+    is_game_like_resource,
     is_tracking_url,
     select_game_frames,
     select_game_resources,
@@ -18,11 +21,35 @@ from .models import CaptureResult, FrameSnapshot, ResourceRecord
 class _NetworkActivity:
     def __init__(self):
         self.inflight: set[int] = set()
+        self.request_frames: dict[int, str] = {}
+        self.focused_frames: set[str] | None = None
         self.last_relevant = time.monotonic()
 
     def started(self, request: Any):
-        if request.method.upper() == "GET" and not is_tracking_url(request.url):
-            self.inflight.add(id(request))
+        resource_type = getattr(request, "resource_type", "other")
+        static_type = resource_type in {
+            "document",
+            "script",
+            "stylesheet",
+            "image",
+            "media",
+            "font",
+        }
+        asset_path = urlparse(request.url).path.lower().endswith(GAME_EXTENSIONS)
+        if (
+            request.method.upper() == "GET"
+            and not is_tracking_url(request.url)
+            and (static_type or asset_path)
+        ):
+            request_id = id(request)
+            try:
+                frame_url = request.frame.url
+            except Exception:
+                frame_url = ""
+            self.request_frames[request_id] = frame_url
+            if self.focused_frames is not None and frame_url not in self.focused_frames:
+                return
+            self.inflight.add(request_id)
             self.last_relevant = time.monotonic()
 
     def finished(self, request: Any):
@@ -30,6 +57,16 @@ class _NetworkActivity:
         if request_id in self.inflight:
             self.inflight.discard(request_id)
             self.last_relevant = time.monotonic()
+        self.request_frames.pop(request_id, None)
+
+    def focus_frames(self, frame_urls: set[str]):
+        self.focused_frames = set(frame_urls)
+        self.inflight = {
+            request_id
+            for request_id in self.inflight
+            if self.request_frames.get(request_id) in self.focused_frames
+        }
+        self.last_relevant = time.monotonic()
 
 
 def _frame_ancestors(frame: Any) -> tuple[str, ...]:
@@ -119,6 +156,14 @@ def wait_for_relevant_idle(
         page.wait_for_timeout(200)
 
 
+def navigate_page(page: Any, url: str, timeout_ms: int = 60_000) -> str | None:
+    try:
+        page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+        return None
+    except Exception as error:
+        return str(error)
+
+
 def _click_start_control(page: Any):
     pattern = re.compile(r"^(play|play game|run game|start|continue)$", re.IGNORECASE)
     for frame in page.frames:
@@ -138,6 +183,32 @@ def _click_start_control(page: Any):
                 return
         except Exception:
             pass
+
+
+def _game_surface_urls(page: Any) -> set[str]:
+    urls: set[str] = set()
+    for frame in page.frames:
+        if is_tracking_url(frame.url):
+            continue
+        try:
+            if frame.locator("canvas").count() > 0:
+                urls.add(frame.url)
+        except Exception:
+            continue
+    return urls
+
+
+def _has_game_surface(page: Any) -> bool:
+    return bool(_game_surface_urls(page))
+
+
+def _wait_for_game_surface(page: Any, timeout_seconds: float) -> bool:
+    started = time.monotonic()
+    while time.monotonic() - started < timeout_seconds:
+        if _has_game_surface(page):
+            return True
+        page.wait_for_timeout(250)
+    return _has_game_surface(page)
 
 
 def _focus_canvas(page: Any):
@@ -161,7 +232,28 @@ def _focus_canvas(page: Any):
             continue
 
 
-def _snapshot_frames(page: Any) -> list[FrameSnapshot]:
+def _should_detect_engine(
+    frame_url: str,
+    canvas_count: int,
+    game_resource_count: int,
+    encoded_size: int,
+) -> bool:
+    if is_tracking_url(frame_url):
+        return False
+    if canvas_count > 0:
+        return True
+    return game_resource_count >= 4 and encoded_size >= 64 * 1024
+
+
+def _snapshot_frames(page: Any, resources: list[ResourceRecord]) -> list[FrameSnapshot]:
+    resource_stats: dict[str, list[int]] = {}
+    for resource in resources:
+        if not is_game_like_resource(resource):
+            continue
+        stats = resource_stats.setdefault(resource.frame_url, [0, 0])
+        stats[0] += 1
+        stats[1] += max(0, resource.encoded_size)
+
     frames: list[FrameSnapshot] = []
     for frame in page.frames:
         url = frame.url
@@ -177,13 +269,21 @@ def _snapshot_frames(page: Any) -> list[FrameSnapshot]:
                 parent_url = frame.parent_frame.url
         except Exception:
             pass
+        game_resource_count, encoded_size = resource_stats.get(url, [0, 0])
+        engine = (
+            detect_engine(frame)
+            if _should_detect_engine(
+                url, canvas_count, game_resource_count, encoded_size
+            )
+            else "unknown"
+        )
         frames.append(
             FrameSnapshot(
                 url=url,
                 parent_url=parent_url,
                 ancestors=_frame_ancestors(frame),
                 canvas_count=canvas_count,
-                engine=detect_engine(frame),
+                engine=engine,
             )
         )
     return frames
@@ -255,14 +355,18 @@ def capture_game(
         context.on("requestfinished", activity.finished)
         context.on("requestfailed", on_failed)
 
-        page.goto(url, timeout=60_000, wait_until="domcontentloaded")
+        navigate_page(page, url)
         page.wait_for_timeout(max(0, initial_wait_ms))
-        _click_start_control(page)
-        page.wait_for_timeout(500)
-        _focus_canvas(page)
+        has_surface = _wait_for_game_surface(page, min(10.0, timeout_seconds / 2))
+        if not has_surface:
+            _click_start_control(page)
+            has_surface = _wait_for_game_surface(page, min(5.0, timeout_seconds / 3))
+        if has_surface:
+            activity.focus_frames(_game_surface_urls(page))
+            _focus_canvas(page)
         wait_for_relevant_idle(page, activity, idle_seconds, timeout_seconds)
 
-        frames = _snapshot_frames(page)
+        frames = _snapshot_frames(page, resources)
         signals = build_frame_signals(frames, resources)
         selected_frames = select_game_frames(signals)
         selected_urls = {signal.frame.url for signal in selected_frames}

@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -136,59 +137,74 @@ def download_resources(
         local_path = output_dir / relative_path
         temp_path = local_path.with_name(local_path.name + ".part")
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        bytes_written = 0
-        try:
-            response = session_for_thread().get(
-                resource.url,
-                headers=replay_headers(resource.request_headers),
-                timeout=60,
-                stream=True,
-                allow_redirects=True,
-            )
-            if response.status_code not in (200, 206):
+        last_error = "download failed"
+        last_status: int | None = None
+        for attempt in range(3):
+            bytes_written = 0
+            try:
+                response = session_for_thread().get(
+                    resource.url,
+                    headers=replay_headers(resource.request_headers),
+                    timeout=60,
+                    stream=True,
+                    allow_redirects=True,
+                )
+                last_status = response.status_code
+                if response.status_code not in (200, 206):
+                    last_error = f"HTTP {response.status_code}"
+                    if response.status_code >= 500 and attempt < 2:
+                        time.sleep(0.25 * (attempt + 1))
+                        continue
+                    return DownloadResult(
+                        url=resource.url,
+                        ok=False,
+                        status=response.status_code,
+                        error=last_error,
+                        required=resource.required,
+                    )
+                response.raw.decode_content = False
+                with temp_path.open("wb") as output:
+                    while True:
+                        chunk = response.raw.read(64 * 1024, decode_content=False)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        bytes_written += len(chunk)
+
+                declared = int(response.headers.get("content-length", "0") or 0)
+                if declared and declared != bytes_written:
+                    raise ValueError(
+                        f"content-length mismatch: expected {declared}, got {bytes_written}"
+                    )
+                if not _complete_partial_response(response, bytes_written):
+                    raise ValueError("incomplete HTTP 206 response")
+                os.replace(temp_path, local_path)
+                resource.local_path = relative_path.as_posix()
                 return DownloadResult(
                     url=resource.url,
-                    ok=False,
+                    ok=True,
+                    bytes_written=bytes_written,
+                    local_path=local_path,
                     status=response.status_code,
-                    error=f"HTTP {response.status_code}",
+                    required=resource.required,
                 )
-            response.raw.decode_content = False
-            with temp_path.open("wb") as output:
-                while True:
-                    chunk = response.raw.read(64 * 1024, decode_content=False)
-                    if not chunk:
-                        break
-                    output.write(chunk)
-                    bytes_written += len(chunk)
-
-            declared = int(response.headers.get("content-length", "0") or 0)
-            if declared and declared != bytes_written:
-                raise ValueError(
-                    f"content-length mismatch: expected {declared}, got {bytes_written}"
-                )
-            if not _complete_partial_response(response, bytes_written):
-                raise ValueError("incomplete HTTP 206 response")
-            os.replace(temp_path, local_path)
-            resource.local_path = relative_path.as_posix()
-            return DownloadResult(
-                url=resource.url,
-                ok=True,
-                bytes_written=bytes_written,
-                local_path=local_path,
-                status=response.status_code,
-            )
-        except (OSError, ValueError, requests.RequestException) as error:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return DownloadResult(
-                url=resource.url,
-                ok=False,
-                bytes_written=bytes_written,
-                status=None,
-                error=str(error),
-            )
+            except (OSError, ValueError, requests.RequestException) as error:
+                last_error = str(error)
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if attempt < 2:
+                    time.sleep(0.25 * (attempt + 1))
+                    continue
+        return DownloadResult(
+            url=resource.url,
+            ok=False,
+            bytes_written=0,
+            status=last_status,
+            error=last_error,
+            required=resource.required,
+        )
 
     unique_resources: list[ResourceRecord] = []
     seen: set[str] = set()

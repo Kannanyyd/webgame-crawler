@@ -67,6 +67,7 @@ def write_reports(
         "downloaded": downloads.downloaded,
         "skipped": downloads.skipped,
         "failed": downloads.failed,
+        "requiredFailed": downloads.required_failed,
         "encodedBytes": downloads.encoded_bytes,
         "knownDecodedBytes": sum(
             _integer_header(resource, "x-amz-meta-uncompressed-length")

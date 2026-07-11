@@ -67,9 +67,18 @@ class GameFixture:
                 if self.path == "/portal":
                     self._html(
                         "<title>Fixture Game</title>"
+                        "<button onclick=\"fetch('/video-player')\">Play</button>"
                         "<iframe src='/ad?url=https%3A%2F%2Fgames.example%2Findex.html'></iframe>"
                         "<iframe src='/game'></iframe>"
                     )
+                    return
+                if self.path == "/video-player":
+                    body = b"video"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
                     return
                 if self.path.startswith("/ad?"):
                     self._html("<img src='/pixel.gif'>")

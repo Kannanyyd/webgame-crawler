@@ -23,6 +23,8 @@ TRACKING_HOST_SUFFIXES = (
     "quantserve.com",
     "taboola.com",
     "outbrain.com",
+    "adtrafficquality.google",
+    "fundingchoicesmessages.google",
 )
 
 TRACKING_HOST_LABELS = {
@@ -37,6 +39,17 @@ TRACKING_HOST_LABELS = {
     "metrics",
     "usersync",
 }
+
+TRACKING_HOST_MARKERS = (
+    "advert",
+    "afvert",
+    "adserver",
+    "creativecdn",
+    "privacymanager",
+    "crwdcntrl",
+    "openx",
+    "fundingchoicesmessages",
+)
 
 GAME_EXTENSIONS = (
     ".html",
@@ -113,6 +126,8 @@ def is_tracking_url(url: str) -> bool:
         return False
     if any(host == suffix or host.endswith("." + suffix) for suffix in TRACKING_HOST_SUFFIXES):
         return True
+    if any(marker in host for marker in TRACKING_HOST_MARKERS):
+        return True
     return any(label in TRACKING_HOST_LABELS for label in host.split("."))
 
 
@@ -171,6 +186,13 @@ def build_frame_signals(
 
 def select_game_frames(signals: Iterable[FrameSignal]) -> list[FrameSignal]:
     candidates = [signal for signal in signals if signal.score > 0 and not is_tracking_url(signal.frame.url)]
+    if not candidates:
+        return []
+    candidates = [
+        signal
+        for signal in candidates
+        if signal.frame.canvas_count > 0 or signal.frame.engine != "unknown"
+    ]
     if not candidates:
         return []
     top_score = candidates[0].score
