@@ -5,6 +5,99 @@ from webgame_crawler.models import ResourceRecord
 
 
 class ManifestTests(unittest.TestCase):
+    def test_cocos_config_expands_all_versioned_imports(self):
+        text = """
+        {
+          "uuids": ["ecpdLyjvZBwrvm+cedCcQy"],
+          "importBase": "import",
+          "versions": {
+            "import": [0, "a1b2c", "01f944abd", "6aa8e"]
+          }
+        }
+        """
+
+        urls = extract_resource_urls(
+            text,
+            "https://cdn.example/game/assets/main/config.12345.json",
+            engine="cocos",
+        )
+
+        self.assertEqual(
+            urls,
+            {
+                "https://cdn.example/game/assets/main/import/ec/"
+                "eca5d2f2-8ef6-41c2-bbe6-f9c79d09c432.a1b2c.json",
+                "https://cdn.example/game/assets/main/import/01/"
+                "01f944abd.6aa8e.json",
+            },
+        )
+
+    def test_cocos_config_expands_versioned_native_candidates_by_type(self):
+        text = """
+        {
+          "uuids": ["ecpdLyjvZBwrvm+cedCcQy", "1102b2af0"],
+          "types": ["cc.AudioClip", "cc.Texture2D"],
+          "paths": {
+            "0": ["sound/hit", 0],
+            "1": ["images/atlas", 1]
+          },
+          "nativeBase": "native",
+          "versions": {
+            "native": [0, "abc12", 1, "def34"]
+          }
+        }
+        """
+
+        urls = extract_resource_urls(
+            text,
+            "https://cdn.example/game/assets/main/config.12345.json",
+            engine="cocos",
+        )
+
+        self.assertIn(
+            "https://cdn.example/game/assets/main/native/ec/"
+            "eca5d2f2-8ef6-41c2-bbe6-f9c79d09c432.abc12.mp3",
+            urls,
+        )
+        self.assertIn(
+            "https://cdn.example/game/assets/main/native/11/"
+            "1102b2af0.def34.png",
+            urls,
+        )
+
+    def test_supplement_probes_cocos_native_candidates(self):
+        source = ResourceRecord(
+            url="https://cdn.example/game/assets/main/config.12345.json",
+            resource_type="fetch",
+            frame_url="https://cdn.example/game/index.html",
+            response_headers={"content-type": "application/json"},
+        )
+        config = """
+        {
+          "uuids": ["ecpdLyjvZBwrvm+cedCcQy"],
+          "types": ["cc.AudioClip"],
+          "paths": {"0": ["sound/hit", 0]},
+          "versions": {"native": [0, "abc12"]}
+        }
+        """
+        expected = (
+            "https://cdn.example/game/assets/main/native/ec/"
+            "eca5d2f2-8ef6-41c2-bbe6-f9c79d09c432.abc12.mp3"
+        )
+
+        def probe_urls(urls, _headers):
+            self.assertGreater(len(urls), 1)
+            return {expected}
+
+        supplemented = supplement_resources(
+            [source],
+            {source.frame_url: "cocos"},
+            lambda *_: config,
+            probe_urls=probe_urls,
+        )
+
+        self.assertEqual([record.url for record in supplemented], [expected])
+
     def test_unity_urls_resolve_beside_index_document(self):
         text = """
         const config = {

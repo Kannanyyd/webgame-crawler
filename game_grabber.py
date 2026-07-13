@@ -15,6 +15,7 @@ from webgame_crawler.download import (
     build_session,
     download_resources,
     fetch_text,
+    probe_resource_urls,
 )
 from webgame_crawler.manifests import supplement_resources
 from webgame_crawler.models import CaptureResult, DownloadSummary
@@ -99,6 +100,7 @@ def run(
         capture.selected_resources,
         frame_engines,
         lambda source_url, headers: fetch_text(session, source_url, headers),
+        probe_urls=lambda urls, headers: probe_resource_urls(session, urls, headers),
     )
     resources = capture.selected_resources + supplemental
 

@@ -92,6 +92,7 @@ class CaptureTests(unittest.TestCase):
 
         self.assertEqual(selected_urls, [fixture.game_url])
         self.assertIn(fixture.asset_url, resource_urls)
+        self.assertIn(fixture.late_asset_url, resource_urls)
         self.assertNotIn("/ad?", selected_urls[0])
         self.assertFalse(any(url.endswith("/video-player") for url in all_urls))
 

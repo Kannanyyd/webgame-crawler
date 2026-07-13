@@ -105,6 +105,67 @@ def fetch_text(
         return None
 
 
+def probe_resource_urls(
+    session: requests.Session,
+    urls: set[str],
+    headers: dict[str, str],
+    max_workers: int = 16,
+) -> set[str]:
+    if not urls:
+        return set()
+    thread_state = threading.local()
+
+    def session_for_thread() -> requests.Session:
+        if not hasattr(thread_state, "session"):
+            worker = requests.Session()
+            worker.headers.update(session.headers)
+            worker.cookies.update(session.cookies)
+            thread_state.session = worker
+        return thread_state.session
+
+    def exists(url: str) -> str | None:
+        for attempt in range(2):
+            try:
+                worker = session_for_thread()
+                response = worker.head(
+                    url,
+                    headers=replay_headers(headers),
+                    timeout=15,
+                    allow_redirects=True,
+                )
+                if response.status_code in (405, 501):
+                    response.close()
+                    fallback_headers = replay_headers(headers)
+                    fallback_headers["Range"] = "bytes=0-0"
+                    response = worker.get(
+                        url,
+                        headers=fallback_headers,
+                        timeout=15,
+                        allow_redirects=True,
+                        stream=True,
+                    )
+                status = response.status_code
+                response.close()
+                if status in (200, 206, 304):
+                    return url
+                if status != 429 and status < 500:
+                    return None
+            except requests.RequestException:
+                if attempt == 1:
+                    return None
+            time.sleep(0.1 * (attempt + 1))
+        return None
+
+    existing: set[str] = set()
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
+        futures = [executor.submit(exists, url) for url in urls]
+        for future in as_completed(futures):
+            url = future.result()
+            if url is not None:
+                existing.add(url)
+    return existing
+
+
 def _complete_partial_response(response: requests.Response, bytes_written: int) -> bool:
     if response.status_code != 206:
         return True

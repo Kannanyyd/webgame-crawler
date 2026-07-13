@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Iterable
 from urllib.parse import urljoin, urlparse
@@ -10,6 +11,29 @@ from .models import ResourceRecord
 
 QUOTED_VALUE_RE = re.compile(r"(?P<quote>['\"])(?P<value>.*?)(?P=quote)", re.DOTALL)
 SCANNABLE_EXTENSIONS = (".html", ".htm", ".js", ".mjs", ".css", ".json")
+COCOS_BASE64_VALUES = {
+    char: index
+    for index, char in enumerate(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    )
+}
+COCOS_NATIVE_EXTENSIONS = {
+    "cc.Texture2D": (".png", ".jpg", ".jpeg", ".webp", ".pvr", ".pkm"),
+    "cc.AudioClip": (".mp3", ".ogg", ".wav", ".m4a"),
+    "cc.BitmapFont": (".fnt", ".font"),
+    "sp.SkeletonData": (".json", ".bin", ".atlas"),
+}
+COCOS_UNKNOWN_NATIVE_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".webp",
+    ".mp3",
+    ".ogg",
+    ".wav",
+    ".json",
+    ".bin",
+    ".atlas",
+)
 
 
 def _clean_reference(value: str) -> str:
@@ -43,8 +67,108 @@ def _valid_reference(reference: str) -> bool:
     return True
 
 
+def _decode_cocos_uuid(value: str) -> str:
+    if len(value) != 22:
+        return value
+    try:
+        decoded = [""] * 36
+        for position in (8, 13, 18, 23):
+            decoded[position] = "-"
+        writable = [index for index, char in enumerate(decoded) if not char]
+        decoded[0], decoded[1] = value[0], value[1]
+        target = 2
+        hex_values = "0123456789abcdef"
+        for index in range(2, 22, 2):
+            left = COCOS_BASE64_VALUES[value[index]]
+            right = COCOS_BASE64_VALUES[value[index + 1]]
+            for part in (left >> 2, ((left & 3) << 2) | (right >> 4), right & 15):
+                decoded[writable[target]] = hex_values[part]
+                target += 1
+        return "".join(decoded)
+    except (KeyError, IndexError):
+        return value
+
+
+def _cocos_versioned_import_urls(text: str, source_url: str) -> set[str]:
+    try:
+        config = json.loads(text)
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(config, dict):
+        return set()
+    versions = config.get("versions")
+    if not isinstance(versions, dict) or not isinstance(versions.get("import"), list):
+        return set()
+
+    uuids = [
+        _decode_cocos_uuid(value) if isinstance(value, str) else value
+        for value in config.get("uuids", [])
+    ]
+    import_base = config.get("importBase") or "import"
+    entries = versions["import"]
+    urls: set[str] = set()
+    for index in range(0, len(entries) - 1, 2):
+        key, version = entries[index], entries[index + 1]
+        if isinstance(key, int):
+            if key < 0 or key >= len(uuids):
+                continue
+            key = uuids[key]
+        if not isinstance(key, str) or not isinstance(version, str):
+            continue
+        uuid = _decode_cocos_uuid(key)
+        reference = f"{import_base}/{uuid[:2]}/{uuid}.{version}.json"
+        urls.add(urljoin(source_url, reference))
+    return urls
+
+
+def _cocos_versioned_native_urls(text: str, source_url: str) -> set[str]:
+    try:
+        config = json.loads(text)
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(config, dict):
+        return set()
+    versions = config.get("versions")
+    if not isinstance(versions, dict) or not isinstance(versions.get("native"), list):
+        return set()
+
+    uuids = [
+        _decode_cocos_uuid(value) if isinstance(value, str) else value
+        for value in config.get("uuids", [])
+    ]
+    types = config.get("types", [])
+    type_by_uuid: dict[str, str] = {}
+    for key, path_info in config.get("paths", {}).items():
+        try:
+            uuid = uuids[int(key)]
+            type_index = path_info[1]
+            if isinstance(uuid, str) and isinstance(type_index, int):
+                type_by_uuid[uuid] = types[type_index]
+        except (IndexError, KeyError, TypeError, ValueError):
+            continue
+
+    native_base = config.get("nativeBase") or "native"
+    entries = versions["native"]
+    urls: set[str] = set()
+    for index in range(0, len(entries) - 1, 2):
+        key, version = entries[index], entries[index + 1]
+        if isinstance(key, int):
+            if key < 0 or key >= len(uuids):
+                continue
+            key = uuids[key]
+        if not isinstance(key, str) or not isinstance(version, str):
+            continue
+        uuid = _decode_cocos_uuid(key)
+        extensions = COCOS_NATIVE_EXTENSIONS.get(
+            type_by_uuid.get(uuid, ""), COCOS_UNKNOWN_NATIVE_EXTENSIONS
+        )
+        for extension in extensions:
+            reference = f"{native_base}/{uuid[:2]}/{uuid}.{version}{extension}"
+            urls.add(urljoin(source_url, reference))
+    return urls
+
+
 def extract_resource_urls(text: str, source_url: str, engine: str = "unknown") -> set[str]:
-    del engine  # Extension coverage is shared; engine detection determines which sources are scanned.
     urls: set[str] = set()
     for match in QUOTED_VALUE_RE.finditer(text):
         reference = _clean_reference(match.group("value"))
@@ -60,6 +184,9 @@ def extract_resource_urls(text: str, source_url: str, engine: str = "unknown") -
             continue
         if urlparse(resolved).scheme in {"http", "https"}:
             urls.add(resolved)
+    if engine == "cocos":
+        urls.update(_cocos_versioned_import_urls(text, source_url))
+        urls.update(_cocos_versioned_native_urls(text, source_url))
     return urls
 
 
@@ -76,6 +203,7 @@ def supplement_resources(
     resources: Iterable[ResourceRecord],
     frame_engines: dict[str, str],
     fetch_text: Callable[[str, dict[str, str]], str | None],
+    probe_urls: Callable[[set[str], dict[str, str]], set[str]] | None = None,
 ) -> list[ResourceRecord]:
     resource_list = list(resources)
     known_urls = {resource.url for resource in resource_list}
@@ -88,7 +216,22 @@ def supplement_resources(
         if not text:
             continue
         engine = frame_engines.get(source.frame_url, "unknown")
-        for url in sorted(extract_resource_urls(text, source.url, engine)):
+        discovered = extract_resource_urls(text, source.url, engine)
+        if engine == "cocos" and probe_urls is not None:
+            native_candidates = _cocos_versioned_native_urls(text, source.url)
+            discovered.difference_update(native_candidates)
+            known_native_stems = {
+                url.rsplit(".", 1)[0]
+                for url in native_candidates
+                if url in known_urls
+            }
+            unresolved = {
+                url
+                for url in native_candidates
+                if url.rsplit(".", 1)[0] not in known_native_stems
+            }
+            discovered.update(probe_urls(unresolved, source.request_headers))
+        for url in sorted(discovered):
             if url in known_urls:
                 continue
             known_urls.add(url)

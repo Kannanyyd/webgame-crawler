@@ -164,25 +164,36 @@ def navigate_page(page: Any, url: str, timeout_ms: int = 60_000) -> str | None:
         return str(error)
 
 
-def _click_start_control(page: Any):
-    pattern = re.compile(r"^(play|play game|run game|start|continue)$", re.IGNORECASE)
+STRONG_START_PATTERN = re.compile(
+    r"^(play game|play now|start game|launch game|"
+    r"现在玩|开始游戏|进入游戏|"
+    r"играть сейчас|начать игру|"
+    r"jogar agora|iniciar jogo|jugar ahora|iniciar juego|"
+    r"şimdi oyna|oyunu başlat|main sekarang|mulai permainan)$",
+    re.IGNORECASE,
+)
+WEAK_START_PATTERN = re.compile(r"^(play|run game|start|continue)$", re.IGNORECASE)
+
+
+def _click_start_control(page: Any, allow_weak: bool = True) -> bool:
+    patterns = (
+        (STRONG_START_PATTERN, WEAK_START_PATTERN)
+        if allow_weak
+        else (STRONG_START_PATTERN,)
+    )
     for frame in page.frames:
         if is_tracking_url(frame.url):
             continue
-        try:
-            control = frame.get_by_role("button", name=pattern).first
-            if control.count() and control.is_visible():
-                control.click(timeout=1500)
-                return
-        except Exception:
-            pass
-        try:
-            control = frame.get_by_role("link", name=pattern).first
-            if control.count() and control.is_visible():
-                control.click(timeout=1500)
-                return
-        except Exception:
-            pass
+        for pattern in patterns:
+            for role in ("button", "link"):
+                try:
+                    control = frame.get_by_role(role, name=pattern).first
+                    if control.count() and control.is_visible():
+                        control.click(timeout=1500)
+                        return True
+                except Exception:
+                    pass
+    return False
 
 
 def _game_surface_urls(page: Any) -> set[str]:
@@ -358,13 +369,22 @@ def capture_game(
         navigate_page(page, url)
         page.wait_for_timeout(max(0, initial_wait_ms))
         has_surface = _wait_for_game_surface(page, min(10.0, timeout_seconds / 2))
-        if not has_surface:
-            _click_start_control(page)
+        clicked_start = _click_start_control(page, allow_weak=not has_surface)
+        if clicked_start or not has_surface:
             has_surface = _wait_for_game_surface(page, min(5.0, timeout_seconds / 3))
         if has_surface:
             activity.focus_frames(_game_surface_urls(page))
             _focus_canvas(page)
-        wait_for_relevant_idle(page, activity, idle_seconds, timeout_seconds)
+        minimum_observation = (
+            min(15.0, max(2.0, timeout_seconds / 3)) if clicked_start else 0.5
+        )
+        wait_for_relevant_idle(
+            page,
+            activity,
+            idle_seconds,
+            timeout_seconds,
+            minimum_seconds=minimum_observation,
+        )
 
         frames = _snapshot_frames(page, resources)
         signals = build_frame_signals(frames, resources)

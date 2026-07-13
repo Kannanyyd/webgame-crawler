@@ -47,6 +47,15 @@ class GameFixture:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if self.path == "/late.bundle":
+                    body = b"fixture-late-game-binary"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self.send_error(404)
 
         self.asset_server = self.stack.enter_context(_FixtureServer(AssetHandler))
@@ -68,8 +77,9 @@ class GameFixture:
                     self._html(
                         "<title>Fixture Game</title>"
                         "<button onclick=\"fetch('/video-player')\">Play</button>"
+                        "<button onclick=\"document.getElementById('game-frame').contentWindow.postMessage('start', '*')\">Play game</button>"
                         "<iframe src='/ad?url=https%3A%2F%2Fgames.example%2Findex.html'></iframe>"
-                        "<iframe src='/game'></iframe>"
+                        "<iframe id='game-frame' src='/game'></iframe>"
                     )
                     return
                 if self.path == "/video-player":
@@ -94,8 +104,14 @@ class GameFixture:
                 if self.path == "/game":
                     self._html(
                         "<canvas id='game'></canvas>"
-                        "<script>fetch('http://127.0.0.1:%d/game.data?token=abc')</script>"
-                        % fixture.asset_server.port
+                        "<script>"
+                        "fetch('http://127.0.0.1:%d/game.data?token=abc');"
+                        "addEventListener('message', event => {"
+                        "if (event.data === 'start') setTimeout(() => "
+                        "fetch('http://127.0.0.1:%d/late.bundle'), 1200);"
+                        "});"
+                        "</script>"
+                        % (fixture.asset_server.port, fixture.asset_server.port)
                     )
                     return
                 self.send_error(404)
@@ -117,3 +133,7 @@ class GameFixture:
     @property
     def asset_url(self):
         return f"http://127.0.0.1:{self.asset_server.port}/game.data?token=abc"
+
+    @property
+    def late_asset_url(self):
+        return f"http://127.0.0.1:{self.asset_server.port}/late.bundle"

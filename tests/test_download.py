@@ -6,7 +6,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
-from webgame_crawler.download import download_resources, resource_local_path
+from webgame_crawler.download import (
+    build_session,
+    download_resources,
+    probe_resource_urls,
+    resource_local_path,
+)
 from webgame_crawler.models import ResourceRecord
 
 
@@ -24,7 +29,11 @@ class _DownloadHandler(BaseHTTPRequestHandler):
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.do_GET()
 
     def do_GET(self):
         if self.path == "/protected.bin":
@@ -78,6 +87,35 @@ class DownloadTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertEqual(first.suffix, ".bin")
         self.assertEqual(second.suffix, ".bin")
+
+    def test_probe_resource_urls_keeps_only_existing_urls_with_session_cookie(self):
+        session = build_session(
+            [
+                {
+                    "name": "session",
+                    "value": "ok",
+                    "domain": "127.0.0.1",
+                    "path": "/",
+                }
+            ]
+        )
+        protected = self.base + "/protected.bin"
+        missing = self.base + "/missing.bin"
+
+        existing = probe_resource_urls(session, {protected, missing}, {}, max_workers=2)
+
+        self.assertEqual(existing, {protected})
+
+    def test_probe_resource_urls_retries_transient_failure(self):
+        _DownloadHandler.flaky_attempts = 0
+        flaky = self.base + "/flaky.bin"
+
+        existing = probe_resource_urls(
+            build_session([]), {flaky}, {}, max_workers=1
+        )
+
+        self.assertEqual(existing, {flaky})
+        self.assertEqual(_DownloadHandler.flaky_attempts, 2)
 
     def test_download_reuses_cookie_accepts_complete_206_and_keeps_raw_br(self):
         urls = [
