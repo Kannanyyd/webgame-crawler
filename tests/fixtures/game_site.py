@@ -82,6 +82,23 @@ class GameFixture:
                         "<iframe id='game-frame' src='/game'></iframe>"
                     )
                     return
+                if self.path == "/delayed-portal":
+                    self._html(
+                        "<title>Delayed Fixture Game</title>"
+                        "<script>"
+                        "setTimeout(() => {"
+                        "const button = document.createElement('button');"
+                        "button.textContent = 'Play game';"
+                        "button.onclick = () => {"
+                        "const frame = document.createElement('iframe');"
+                        "frame.src = '/game';"
+                        "document.body.appendChild(frame);"
+                        "};"
+                        "document.body.appendChild(button);"
+                        "}, 3500);"
+                        "</script>"
+                    )
+                    return
                 if self.path == "/video-player":
                     body = b"video"
                     self.send_response(200)
@@ -129,6 +146,10 @@ class GameFixture:
     @property
     def game_url(self):
         return f"http://127.0.0.1:{self.portal_server.port}/game"
+
+    @property
+    def delayed_url(self):
+        return f"http://127.0.0.1:{self.portal_server.port}/delayed-portal"
 
     @property
     def asset_url(self):

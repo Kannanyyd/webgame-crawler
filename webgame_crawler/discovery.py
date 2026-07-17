@@ -51,6 +51,18 @@ TRACKING_HOST_MARKERS = (
     "fundingchoicesmessages",
 )
 
+TRACKING_PATH_MARKERS = (
+    "google-tag-manager",
+)
+
+TRACKING_PATH_SEGMENTS = {
+    "pixel",
+    "pixels",
+    "usersync",
+    "usync",
+    "cookie-sync",
+}
+
 GAME_EXTENSIONS = (
     ".html",
     ".htm",
@@ -128,7 +140,19 @@ def is_tracking_url(url: str) -> bool:
         return True
     if any(marker in host for marker in TRACKING_HOST_MARKERS):
         return True
-    return any(label in TRACKING_HOST_LABELS for label in host.split("."))
+    if any(label in TRACKING_HOST_LABELS for label in host.split(".")):
+        return True
+    try:
+        path = urlparse(url).path.lower()
+    except ValueError:
+        return False
+    if any(marker in path for marker in TRACKING_PATH_MARKERS):
+        return True
+    return any(
+        segment in TRACKING_PATH_SEGMENTS
+        for segment in path.split("/")
+        if segment
+    )
 
 
 def is_game_like_resource(resource: ResourceRecord) -> bool:
@@ -136,7 +160,10 @@ def is_game_like_resource(resource: ResourceRecord) -> bool:
         return False
     if resource.status not in (None, 200, 206, 304):
         return False
-    path = urlparse(resource.url).path.lower()
+    parsed_url = urlparse(resource.url)
+    if parsed_url.scheme not in {"http", "https"}:
+        return False
+    path = parsed_url.path.lower()
     content_type = resource.response_headers.get("content-type", "").lower()
     return (
         resource.resource_type in GAME_RESOURCE_TYPES
@@ -163,9 +190,9 @@ def build_frame_signals(
         if signal is None:
             continue
         signal.resource_count += 1
-        signal.encoded_size += max(0, resource.encoded_size)
         if is_game_like_resource(resource):
             signal.game_like_count += 1
+            signal.encoded_size += max(0, resource.encoded_size)
 
     for signal in signals.values():
         frame = signal.frame
@@ -191,7 +218,16 @@ def select_game_frames(signals: Iterable[FrameSignal]) -> list[FrameSignal]:
     candidates = [
         signal
         for signal in candidates
-        if signal.frame.canvas_count > 0 or signal.frame.engine != "unknown"
+        if (
+            signal.frame.canvas_count > 0
+            or signal.frame.engine != "unknown"
+            or (
+                signal.frame.parent_url
+                and urlparse(signal.frame.url).scheme in {"http", "https"}
+                and signal.game_like_count >= 4
+                and signal.encoded_size >= 64 * 1024
+            )
+        )
     ]
     if not candidates:
         return []

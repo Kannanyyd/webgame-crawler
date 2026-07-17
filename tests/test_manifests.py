@@ -32,6 +32,99 @@ class ManifestTests(unittest.TestCase):
             },
         )
 
+    def test_cocos_import_decodes_uuid_with_subasset_suffix(self):
+        text = """
+        {
+          "uuids": ["5awIg39ZFO/5Yc26OXjv+J@f9941"],
+          "versions": {"import": [0, "bf995"]}
+        }
+        """
+
+        urls = extract_resource_urls(
+            text,
+            "https://cdn.example/game/assets/resources/config.json",
+            engine="cocos",
+        )
+
+        self.assertEqual(
+            urls,
+            {
+                "https://cdn.example/game/assets/resources/import/5a/"
+                "5ac08837-f591-4eff-961c-dba3978eff89@f9941.bf995.json"
+            },
+        )
+
+    def test_cocos_import_uses_binary_extension_map(self):
+        text = """
+        {
+          "uuids": ["7051cea2-46b6-46d7-9a6a-836a4d780015"],
+          "extensionMap": {".cconb": [0]},
+          "versions": {"import": [0, "d1dca"]}
+        }
+        """
+
+        urls = extract_resource_urls(
+            text,
+            "https://cdn.example/game/assets/main/config.json",
+            engine="cocos",
+        )
+
+        self.assertEqual(
+            urls,
+            {
+                "https://cdn.example/game/assets/main/import/70/"
+                "7051cea2-46b6-46d7-9a6a-836a4d780015.d1dca.bin"
+            },
+        )
+
+    def test_cocos_import_ignores_malformed_extension_map(self):
+        for extension_map in ("null", "[]"):
+            with self.subTest(extension_map=extension_map):
+                text = f"""
+                {{
+                  "uuids": ["7051cea2-46b6-46d7-9a6a-836a4d780015"],
+                  "extensionMap": {extension_map},
+                  "versions": {{"import": [0, "d1dca"]}}
+                }}
+                """
+
+                urls = extract_resource_urls(
+                    text,
+                    "https://cdn.example/game/assets/main/config.json",
+                    engine="cocos",
+                )
+
+                self.assertEqual(
+                    urls,
+                    {
+                        "https://cdn.example/game/assets/main/import/70/"
+                        "7051cea2-46b6-46d7-9a6a-836a4d780015.d1dca.json"
+                    },
+                )
+
+    def test_cocos_extension_map_resolves_numeric_string_uuid_index(self):
+        text = """
+        {
+          "uuids": ["7051cea2-46b6-46d7-9a6a-836a4d780015"],
+          "extensionMap": {".cconb": ["0"]},
+          "versions": {"import": [0, "d1dca"]}
+        }
+        """
+
+        urls = extract_resource_urls(
+            text,
+            "https://cdn.example/game/assets/main/config.json",
+            engine="cocos",
+        )
+
+        self.assertEqual(
+            urls,
+            {
+                "https://cdn.example/game/assets/main/import/70/"
+                "7051cea2-46b6-46d7-9a6a-836a4d780015.d1dca.bin"
+            },
+        )
+
     def test_cocos_config_expands_versioned_native_candidates_by_type(self):
         text = """
         {
@@ -97,6 +190,76 @@ class ManifestTests(unittest.TestCase):
         )
 
         self.assertEqual([record.url for record in supplemented], [expected])
+
+    def test_supplement_keeps_declared_cocos_import_when_probe_is_inconclusive(self):
+        source = ResourceRecord(
+            url="https://cdn.example/game/assets/main/config.json",
+            resource_type="fetch",
+            frame_url="https://cdn.example/game/index.html",
+            response_headers={"content-type": "application/json"},
+        )
+        config = """
+        {
+          "uuids": ["01f944abd"],
+          "versions": {"import": [0, "6aa8e"]}
+        }
+        """
+        expected = (
+            "https://cdn.example/game/assets/main/import/01/"
+            "01f944abd.6aa8e.json"
+        )
+
+        supplemented = supplement_resources(
+            [source],
+            {source.frame_url: "cocos"},
+            lambda *_: config,
+            probe_urls=lambda *_: set(),
+        )
+
+        self.assertEqual([record.url for record in supplemented], [expected])
+
+    def test_supplement_verifies_speculative_cocos_script_references(self):
+        source = ResourceRecord(
+            url="https://cdn.example/game/src/main.js",
+            resource_type="script",
+            frame_url="https://cdn.example/game/index.html",
+            response_headers={"content-type": "application/javascript"},
+        )
+        existing = "https://cdn.example/game/src/assets/real.png"
+        missing = "https://cdn.example/game/src/chunks/ghost.js"
+        script = "'assets/real.png' 'chunks/ghost.js'"
+
+        def probe_urls(urls, _headers):
+            self.assertEqual(urls, {existing, missing})
+            return {existing}
+
+        supplemented = supplement_resources(
+            [source],
+            {source.frame_url: "cocos"},
+            lambda *_: script,
+            probe_urls=probe_urls,
+        )
+
+        self.assertEqual([record.url for record in supplemented], [existing])
+
+    def test_supplement_verifies_speculative_generic_script_references(self):
+        source = ResourceRecord(
+            url="https://cdn.example/game/main.js",
+            resource_type="script",
+            frame_url="https://cdn.example/game/index.html",
+            response_headers={"content-type": "application/javascript"},
+        )
+        existing = "https://cdn.example/game/assets/real.json"
+        missing = "https://cdn.example/game/assets/missing.json"
+
+        supplemented = supplement_resources(
+            [source],
+            {source.frame_url: "html5"},
+            lambda *_: "'assets/real.json' 'assets/missing.json'",
+            probe_urls=lambda urls, _headers: urls & {existing},
+        )
+
+        self.assertEqual([record.url for record in supplemented], [existing])
 
     def test_unity_urls_resolve_beside_index_document(self):
         text = """

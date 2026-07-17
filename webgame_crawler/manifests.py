@@ -68,23 +68,25 @@ def _valid_reference(reference: str) -> bool:
 
 
 def _decode_cocos_uuid(value: str) -> str:
-    if len(value) != 22:
+    base, separator, suffix = value.partition("@")
+    if len(base) != 22:
         return value
     try:
         decoded = [""] * 36
         for position in (8, 13, 18, 23):
             decoded[position] = "-"
         writable = [index for index, char in enumerate(decoded) if not char]
-        decoded[0], decoded[1] = value[0], value[1]
+        decoded[0], decoded[1] = base[0], base[1]
         target = 2
         hex_values = "0123456789abcdef"
         for index in range(2, 22, 2):
-            left = COCOS_BASE64_VALUES[value[index]]
-            right = COCOS_BASE64_VALUES[value[index + 1]]
+            left = COCOS_BASE64_VALUES[base[index]]
+            right = COCOS_BASE64_VALUES[base[index + 1]]
             for part in (left >> 2, ((left & 3) << 2) | (right >> 4), right & 15):
                 decoded[writable[target]] = hex_values[part]
                 target += 1
-        return "".join(decoded)
+        result = "".join(decoded)
+        return result + separator + suffix
     except (KeyError, IndexError):
         return value
 
@@ -104,6 +106,26 @@ def _cocos_versioned_import_urls(text: str, source_url: str) -> set[str]:
         _decode_cocos_uuid(value) if isinstance(value, str) else value
         for value in config.get("uuids", [])
     ]
+    extension_by_uuid: dict[str, str] = {}
+    extension_map = config.get("extensionMap")
+    if not isinstance(extension_map, dict):
+        extension_map = {}
+    for extension, keys in extension_map.items():
+        if not isinstance(extension, str) or not isinstance(keys, list):
+            continue
+        resolved_extension = ".bin" if extension == ".cconb" else extension
+        for key in keys:
+            index = None
+            if isinstance(key, int):
+                index = key
+            elif isinstance(key, str) and key.isdecimal():
+                index = int(key)
+            if index is not None:
+                if index < 0 or index >= len(uuids):
+                    continue
+                key = uuids[index]
+            if isinstance(key, str):
+                extension_by_uuid[_decode_cocos_uuid(key)] = resolved_extension
     import_base = config.get("importBase") or "import"
     entries = versions["import"]
     urls: set[str] = set()
@@ -116,7 +138,8 @@ def _cocos_versioned_import_urls(text: str, source_url: str) -> set[str]:
         if not isinstance(key, str) or not isinstance(version, str):
             continue
         uuid = _decode_cocos_uuid(key)
-        reference = f"{import_base}/{uuid[:2]}/{uuid}.{version}.json"
+        extension = extension_by_uuid.get(uuid, ".json")
+        reference = f"{import_base}/{uuid[:2]}/{uuid}.{version}{extension}"
         urls.add(urljoin(source_url, reference))
     return urls
 
@@ -217,20 +240,36 @@ def supplement_resources(
             continue
         engine = frame_engines.get(source.frame_url, "unknown")
         discovered = extract_resource_urls(text, source.url, engine)
-        if engine == "cocos" and probe_urls is not None:
-            native_candidates = _cocos_versioned_native_urls(text, source.url)
-            discovered.difference_update(native_candidates)
-            known_native_stems = {
-                url.rsplit(".", 1)[0]
-                for url in native_candidates
-                if url in known_urls
-            }
-            unresolved = {
+        if probe_urls is not None:
+            unresolved: set[str] = set()
+            declared_imports: set[str] = set()
+            if engine == "cocos":
+                declared_imports = _cocos_versioned_import_urls(
+                    text, source.url
+                )
+                native_candidates = _cocos_versioned_native_urls(text, source.url)
+                discovered.difference_update(native_candidates)
+                known_native_stems = {
+                    url.rsplit(".", 1)[0]
+                    for url in native_candidates
+                    if url in known_urls
+                }
+                unresolved = {
+                    url
+                    for url in native_candidates
+                    if url.rsplit(".", 1)[0] not in known_native_stems
+                }
+            unverified = {
                 url
-                for url in native_candidates
-                if url.rsplit(".", 1)[0] not in known_native_stems
+                for url in discovered
+                if url not in known_urls and url not in declared_imports
             }
-            discovered.update(probe_urls(unresolved, source.request_headers))
+            verified = probe_urls(
+                unverified | unresolved, source.request_headers
+            )
+            discovered = {
+                url for url in discovered if url in known_urls
+            } | declared_imports | verified
         for url in sorted(discovered):
             if url in known_urls:
                 continue

@@ -41,6 +41,16 @@ class DiscoveryTests(unittest.TestCase):
         )
         self.assertFalse(is_tracking_url("https://fonts.gstatic.com/font.woff2"))
 
+    def test_pixel_themed_game_paths_are_not_tracking(self):
+        self.assertFalse(
+            is_tracking_url(
+                "https://cdn.example/games/pixel-adventure/index.html"
+            )
+        )
+        self.assertFalse(
+            is_tracking_url("https://cdn.example/sprites/pixel.png")
+        )
+
     def test_canvas_frame_with_large_binary_traffic_beats_ad_frame(self):
         ad_url = (
             "https://cm.g.doubleclick.net/partnerpixels?"
@@ -112,6 +122,21 @@ class DiscoveryTests(unittest.TestCase):
             ],
         )
 
+    def test_blob_runtime_resources_are_not_selected_for_http_download(self):
+        game_url = "https://game.example/index.html"
+        resources = [
+            ResourceRecord(
+                url="blob:https://game.example/runtime-worker",
+                resource_type="script",
+                frame_url=game_url,
+                status=200,
+            )
+        ]
+
+        selected = select_game_resources(resources, {game_url})
+
+        self.assertEqual(selected, [])
+
     def test_portal_without_canvas_or_engine_is_not_a_game_context(self):
         portal = FrameSnapshot(url="https://portal.example/game")
         resources = [
@@ -125,6 +150,74 @@ class DiscoveryTests(unittest.TestCase):
         ]
 
         selected = select_game_frames(build_frame_signals([portal], resources))
+
+        self.assertEqual(selected, [])
+
+    def test_resource_rich_dom_game_subframe_is_selected_without_canvas(self):
+        portal_url = "https://portal.example/games/pipe-puzzle"
+        game_url = "https://app-123.games-cdn.example/release/index.html"
+        tag_manager_url = (
+            "https://static.example/pixels/google-tag-manager.html"
+        )
+        frames = [
+            FrameSnapshot(url=portal_url),
+            FrameSnapshot(url=game_url, parent_url=portal_url),
+            FrameSnapshot(url=tag_manager_url, parent_url=portal_url),
+        ]
+        resources = [
+            ResourceRecord(
+                url=f"https://app-123.games-cdn.example/release/assets/{index}.js",
+                resource_type="script",
+                frame_url=game_url,
+                status=200,
+                encoded_size=16_384,
+            )
+            for index in range(5)
+        ]
+        resources.extend(
+            ResourceRecord(
+                url=f"https://static.example/pixels/tracker-{index}.js",
+                resource_type="script",
+                frame_url=tag_manager_url,
+                status=200,
+                encoded_size=100_000,
+            )
+            for index in range(6)
+        )
+
+        selected = select_game_frames(build_frame_signals(frames, resources))
+
+        self.assertEqual([signal.frame.url for signal in selected], [game_url])
+
+    def test_dom_frame_does_not_use_non_game_bytes_to_meet_threshold(self):
+        portal_url = "https://portal.example/game"
+        widget_url = "https://widgets.example/frame.html"
+        frames = [
+            FrameSnapshot(url=portal_url),
+            FrameSnapshot(url=widget_url, parent_url=portal_url),
+        ]
+        resources = [
+            ResourceRecord(
+                url=f"https://widgets.example/script-{index}.js",
+                resource_type="script",
+                frame_url=widget_url,
+                status=200,
+                encoded_size=1_024,
+            )
+            for index in range(4)
+        ]
+        resources.append(
+            ResourceRecord(
+                url="https://widgets.example/large-response",
+                method="POST",
+                resource_type="xhr",
+                frame_url=widget_url,
+                status=200,
+                encoded_size=1_000_000,
+            )
+        )
+
+        selected = select_game_frames(build_frame_signals(frames, resources))
 
         self.assertEqual(selected, [])
 

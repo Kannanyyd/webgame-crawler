@@ -196,6 +196,17 @@ def _click_start_control(page: Any, allow_weak: bool = True) -> bool:
     return False
 
 
+def _wait_for_start_control(
+    page: Any, timeout_seconds: float, allow_weak: bool = True
+) -> bool:
+    started = time.monotonic()
+    while time.monotonic() - started < timeout_seconds:
+        if _click_start_control(page, allow_weak=allow_weak):
+            return True
+        page.wait_for_timeout(250)
+    return _click_start_control(page, allow_weak=allow_weak)
+
+
 def _game_surface_urls(page: Any) -> set[str]:
     urls: set[str] = set()
     for frame in page.frames:
@@ -370,6 +381,12 @@ def capture_game(
         page.wait_for_timeout(max(0, initial_wait_ms))
         has_surface = _wait_for_game_surface(page, min(10.0, timeout_seconds / 2))
         clicked_start = _click_start_control(page, allow_weak=not has_surface)
+        if not clicked_start and not has_surface:
+            clicked_start = _wait_for_start_control(
+                page,
+                min(5.0, timeout_seconds / 3),
+                allow_weak=True,
+            )
         if clicked_start or not has_surface:
             has_surface = _wait_for_game_surface(page, min(5.0, timeout_seconds / 3))
         if has_surface:

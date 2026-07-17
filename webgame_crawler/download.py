@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import requests
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
 
 from .models import DownloadResult, DownloadSummary, ResourceRecord
 
@@ -133,7 +134,10 @@ def probe_resource_urls(
                     timeout=15,
                     allow_redirects=True,
                 )
-                if response.status_code in (405, 501):
+                if (
+                    response.status_code not in (200, 206, 304)
+                    and response.status_code not in (404, 410)
+                ):
                     response.close()
                     fallback_headers = replay_headers(headers)
                     fallback_headers["Range"] = "bytes=0-0"
@@ -249,7 +253,12 @@ def download_resources(
                     status=response.status_code,
                     required=resource.required,
                 )
-            except (OSError, ValueError, requests.RequestException) as error:
+            except (
+                OSError,
+                ValueError,
+                requests.RequestException,
+                Urllib3HTTPError,
+            ) as error:
                 last_error = str(error)
                 try:
                     temp_path.unlink(missing_ok=True)

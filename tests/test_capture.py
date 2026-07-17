@@ -96,6 +96,23 @@ class CaptureTests(unittest.TestCase):
         self.assertNotIn("/ad?", selected_urls[0])
         self.assertFalse(any(url.endswith("/video-player") for url in all_urls))
 
+    def test_retries_start_control_until_delayed_button_appears(self):
+        browser_path = Path(__file__).resolve().parents[1] / ".pw-browsers"
+        with GameFixture() as fixture:
+            result = capture_game(
+                fixture.delayed_url,
+                browser_path=browser_path,
+                headless=True,
+                initial_wait_ms=0,
+                idle_seconds=0.25,
+                timeout_seconds=6,
+            )
+
+        self.assertEqual(
+            [signal.frame.url for signal in result.selected_frames],
+            [fixture.game_url],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

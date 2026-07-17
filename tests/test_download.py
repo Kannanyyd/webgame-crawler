@@ -33,6 +33,9 @@ class _DownloadHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_HEAD(self):
+        if self.path == "/head-blocked.bin":
+            self._send(b"head forbidden", status=403)
+            return
         self.do_GET()
 
     def do_GET(self):
@@ -61,6 +64,17 @@ class _DownloadHandler(BaseHTTPRequestHandler):
                 self._send(b"retry", status=503)
             else:
                 self._send(b"recovered")
+            return
+        if self.path == "/head-blocked.bin":
+            self._send(b"get works")
+            return
+        if self.path == "/truncated.bin":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", "20")
+            self.end_headers()
+            self.wfile.write(b"short")
+            self.close_connection = True
             return
         self._send(b"missing", status=404)
 
@@ -117,6 +131,15 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(existing, {flaky})
         self.assertEqual(_DownloadHandler.flaky_attempts, 2)
 
+    def test_probe_falls_back_to_get_when_head_is_rejected(self):
+        url = self.base + "/head-blocked.bin"
+
+        existing = probe_resource_urls(
+            build_session([]), {url}, {}, max_workers=1
+        )
+
+        self.assertEqual(existing, {url})
+
     def test_download_reuses_cookie_accepts_complete_206_and_keeps_raw_br(self):
         urls = [
             self.base + "/protected.bin",
@@ -168,6 +191,25 @@ class DownloadTests(unittest.TestCase):
 
         self.assertEqual(summary.failed, 0)
         self.assertEqual(_DownloadHandler.flaky_attempts, 2)
+
+    def test_stream_read_failure_is_recorded_without_aborting_other_downloads(self):
+        truncated = self.base + "/truncated.bin"
+        healthy = self.base + "/variant.bin?v=1"
+        resources = [
+            ResourceRecord(url=truncated, status=200),
+            ResourceRecord(url=healthy, status=200),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary = download_resources(
+                resources, [], Path(temp_dir), self.host, max_workers=2
+            )
+
+        by_url = {result.url: result for result in summary.results}
+        self.assertFalse(by_url[truncated].ok)
+        self.assertIn("IncompleteRead", by_url[truncated].error)
+        self.assertTrue(by_url[healthy].ok)
+        self.assertEqual(summary.failed, 1)
 
 
 if __name__ == "__main__":
