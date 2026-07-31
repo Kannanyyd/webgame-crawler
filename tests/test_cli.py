@@ -120,6 +120,7 @@ class CliTests(unittest.TestCase):
                         url="https://cdn.example/game.wasm.br?token=2",
                         resource_type="fetch",
                         frame_url="https://game.example/index.html",
+                        frame_ancestors=("https://portal.example/game",),
                         error="request not found in HAR",
                         required=True,
                     )
@@ -191,10 +192,78 @@ class CliTests(unittest.TestCase):
                     "method": "GET",
                     "type": "fetch",
                     "frameUrl": "https://game.example/index.html",
+                    "frameAncestors": ["https://portal.example/game"],
                     "error": "request not found in HAR",
                     "required": True,
                 }
             ],
+        )
+
+    def test_run_resolves_default_collaborators_at_call_time_and_ensures_browser(self):
+        capture = self._capture()
+        events = []
+
+        def capture_func(*_args, har_path, **_kwargs):
+            events.append("capture")
+            _write_valid_har_zip(har_path)
+            return capture
+
+        def inspect_har_func(har_path):
+            events.append("inspect")
+            return HarArchiveInfo(
+                har_path,
+                True,
+                size=har_path.stat().st_size,
+                entry_count=1,
+                body_count=1,
+            )
+
+        def replay_func(har_path, replay_capture, **_kwargs):
+            events.append("replay")
+            return ReplaySummary(
+                archive=HarArchiveInfo(
+                    har_path,
+                    True,
+                    size=har_path.stat().st_size,
+                    entry_count=1,
+                    body_count=1,
+                ),
+                requested_url=replay_capture.requested_url,
+                final_url=replay_capture.final_url,
+                reached_game_surface=True,
+            )
+
+        def download_func(*_args, **_kwargs):
+            events.append("download")
+            return DownloadSummary()
+
+        def ensure_browser_func():
+            events.append("ensure")
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            game_grabber, "capture_game", capture_func
+        ), patch.object(
+            game_grabber, "download_resources", download_func
+        ), patch.object(
+            game_grabber, "verify_replay", replay_func
+        ), patch.object(
+            game_grabber, "inspect_har", inspect_har_func
+        ), patch.object(
+            game_grabber, "ensure_browser", ensure_browser_func
+        ), patch(
+            "playwright.sync_api.sync_playwright",
+            side_effect=AssertionError("stale capture default used"),
+        ):
+            exit_code = game_grabber.run(
+                capture.requested_url,
+                output_root=Path(temp_dir),
+                printer=lambda *_: None,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            events,
+            ["ensure", "capture", "inspect", "replay", "download"],
         )
 
     def test_run_does_not_fail_when_only_optional_resource_is_missing(self):

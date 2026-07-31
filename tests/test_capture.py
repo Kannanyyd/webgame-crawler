@@ -1,7 +1,9 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+import zipfile
 
 from tests.fixtures.game_site import GameFixture
 from webgame_crawler.har import inspect_har
@@ -28,10 +30,41 @@ class CaptureTests(unittest.TestCase):
                 har_path=har_path,
             )
             archive = inspect_har(har_path)
+            with zipfile.ZipFile(har_path) as har_archive:
+                member_names = har_archive.namelist()
+                har_member = next(
+                    name for name in member_names if name.endswith(".har")
+                )
+                har = json.loads(har_archive.read(har_member))
+                asset_entry = next(
+                    entry
+                    for entry in har["log"]["entries"]
+                    if entry["request"]["url"] == fixture.asset_url
+                )
+                attachment = asset_entry["response"]["content"]["_file"]
+                attachment_body = har_archive.read(attachment)
+                response_headers = {
+                    header["name"].lower(): header["value"]
+                    for header in asset_entry["response"]["headers"]
+                }
 
         self.assertTrue(archive.valid, archive.error)
         self.assertGreater(archive.entry_count, 0)
         self.assertGreater(archive.body_count, 0)
+        self.assertIn(attachment, member_names)
+        self.assertEqual(attachment_body, b"fixture-game-binary")
+        self.assertEqual(asset_entry["response"]["status"], 200)
+        self.assertEqual(
+            asset_entry["response"]["content"]["mimeType"],
+            "application/octet-stream",
+        )
+        self.assertEqual(response_headers["content-type"], "application/octet-stream")
+        self.assertEqual(response_headers["access-control-allow-origin"], "*")
+        self.assertEqual(
+            response_headers["content-length"],
+            str(len(b"fixture-game-binary")),
+        )
+        self.assertIn("timings", asset_entry)
 
     def test_engine_detection_skips_blank_and_low_traffic_frames(self):
         self.assertFalse(_should_detect_engine("about:blank", 0, 0, 0))

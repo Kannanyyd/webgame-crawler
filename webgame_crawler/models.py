@@ -51,6 +51,9 @@ class CaptureResult:
     selected_resources: list[ResourceRecord]
     cookies: list[dict[str, Any]] = field(default_factory=list)
     user_agent: str = ""
+    initial_wait_ms: int = 2_000
+    idle_seconds: float = 4.0
+    timeout_seconds: float = 45.0
 
 
 @dataclass(slots=True)
@@ -108,6 +111,7 @@ class ReplayFailure:
     frame_url: str = ""
     error: str = "request not found in HAR"
     required: bool = False
+    frame_ancestors: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

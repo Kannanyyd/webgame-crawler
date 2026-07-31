@@ -107,6 +107,7 @@ def write_reports(
                     "method": failure.method,
                     "type": failure.resource_type,
                     "frameUrl": failure.frame_url,
+                    "frameAncestors": list(failure.frame_ancestors),
                     "error": failure.error,
                     "required": failure.required,
                 }

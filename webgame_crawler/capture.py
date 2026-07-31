@@ -18,6 +18,11 @@ from .discovery import (
 from .models import CaptureResult, FrameSnapshot, ResourceRecord
 
 
+DEFAULT_INITIAL_WAIT_MS = 2_000
+DEFAULT_IDLE_SECONDS = 4.0
+DEFAULT_TIMEOUT_SECONDS = 45.0
+
+
 class _NetworkActivity:
     def __init__(self):
         self.inflight: set[int] = set()
@@ -351,9 +356,9 @@ def capture_game(
     url: str,
     browser_path: str | Path | None = None,
     headless: bool = True,
-    initial_wait_ms: int = 2_000,
-    idle_seconds: float = 4.0,
-    timeout_seconds: float = 45.0,
+    initial_wait_ms: int = DEFAULT_INITIAL_WAIT_MS,
+    idle_seconds: float = DEFAULT_IDLE_SECONDS,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     har_path: str | Path | None = None,
 ) -> CaptureResult:
     if browser_path is not None:
@@ -462,4 +467,7 @@ def capture_game(
         selected_resources=selected_resources,
         cookies=cookies,
         user_agent=user_agent,
+        initial_wait_ms=initial_wait_ms,
+        idle_seconds=idle_seconds,
+        timeout_seconds=timeout_seconds,
     )

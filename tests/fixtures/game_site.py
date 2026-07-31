@@ -2,17 +2,86 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+import socket
+from threading import Event, Lock, Thread
+
+
+class _CountingHTTPServer(ThreadingHTTPServer):
+    def __init__(self, server_address, handler_factory):
+        self._connection_lock = Lock()
+        self.accepted_connections = 0
+        super().__init__(server_address, handler_factory)
+
+    def get_request(self):
+        request = super().get_request()
+        with self._connection_lock:
+            self.accepted_connections += 1
+        return request
+
+    def reset_connections(self):
+        with self._connection_lock:
+            self.accepted_connections = 0
+
+
+class _DatagramCounter:
+    def __init__(self):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(("127.0.0.1", 0))
+        self.socket.settimeout(0.1)
+        self._count_lock = Lock()
+        self._count = 0
+        self._stop = Event()
+        self.thread = Thread(target=self._receive, daemon=True)
+
+    @property
+    def port(self):
+        return self.socket.getsockname()[1]
+
+    @property
+    def count(self):
+        with self._count_lock:
+            return self._count
+
+    def reset(self):
+        with self._count_lock:
+            self._count = 0
+
+    def _receive(self):
+        while not self._stop.is_set():
+            try:
+                self.socket.recvfrom(65_535)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            with self._count_lock:
+                self._count += 1
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self._stop.set()
+        self.socket.close()
+        self.thread.join(timeout=2)
 
 
 class _FixtureServer:
     def __init__(self, handler_factory):
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler_factory)
+        self.server = _CountingHTTPServer(("127.0.0.1", 0), handler_factory)
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
 
     @property
     def port(self):
         return self.server.server_address[1]
+
+    @property
+    def accepted_connections(self):
+        return self.server.accepted_connections
+
+    def reset_connections(self):
+        self.server.reset_connections()
 
     def __enter__(self):
         self.thread.start()
@@ -29,9 +98,11 @@ class GameFixture:
         self.stack = ExitStack()
         self.asset_server = None
         self.portal_server = None
+        self.datagram_counter = None
 
     def __enter__(self):
         fixture = self
+        self.datagram_counter = self.stack.enter_context(_DatagramCounter())
 
         class AssetHandler(BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -104,6 +175,54 @@ class GameFixture:
                         "</script>"
                     )
                     return
+                if self.path == "/auto-delayed-game":
+                    self._html(
+                        "<title>Auto-delayed Fixture Game</title>"
+                        "<canvas id='game'></canvas>"
+                        "<script>setTimeout(() => fetch('http://127.0.0.1:%d/late.bundle'), 1200)</script>"
+                        % fixture.asset_server.port
+                    )
+                    return
+                if self.path == "/network-probe":
+                    self._html(
+                        "<title>Network Isolation Fixture</title>"
+                        "<canvas id='game'></canvas>"
+                        "<script>"
+                        "window.probeSocket = new WebSocket('ws://127.0.0.1:%d/socket');"
+                        "window.probePeer = new RTCPeerConnection({iceServers: [{urls: 'stun:127.0.0.1:%d'}]});"
+                        "window.probePeer.createDataChannel('probe');"
+                        "window.probePeer.createOffer().then(offer => window.probePeer.setLocalDescription(offer));"
+                        "</script>"
+                        % (fixture.portal_server.port, fixture.datagram_counter.port)
+                    )
+                    return
+                if self.path == "/nested-game":
+                    self._html(
+                        "<title>Nested Fixture Game</title>"
+                        "<canvas id='game'></canvas>"
+                        "<iframe src='/nested-child'></iframe>"
+                    )
+                    return
+                if self.path == "/nested-child":
+                    self._html(
+                        "<script>"
+                        "const script = document.createElement('script');"
+                        "script.src = '/runtime.js?nonce=' + crypto.randomUUID();"
+                        "document.head.appendChild(script);"
+                        "</script>"
+                    )
+                    return
+                if self.path.startswith("/runtime.js?nonce="):
+                    body = b"window.nestedRuntimeLoaded = true;"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/javascript")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if self.path == "/socket":
+                    self.send_error(426)
+                    return
                 if self.path == "/video-player":
                     body = b"video"
                     self.send_response(200)
@@ -155,6 +274,38 @@ class GameFixture:
     @property
     def delayed_url(self):
         return f"http://127.0.0.1:{self.portal_server.port}/delayed-portal"
+
+    @property
+    def auto_delayed_url(self):
+        return f"http://127.0.0.1:{self.portal_server.port}/auto-delayed-game"
+
+    @property
+    def network_probe_url(self):
+        return f"http://127.0.0.1:{self.portal_server.port}/network-probe"
+
+    @property
+    def nested_game_url(self):
+        return f"http://127.0.0.1:{self.portal_server.port}/nested-game"
+
+    @property
+    def nested_child_url(self):
+        return f"http://127.0.0.1:{self.portal_server.port}/nested-child"
+
+    @property
+    def live_tcp_connections(self):
+        return (
+            self.portal_server.accepted_connections
+            + self.asset_server.accepted_connections
+        )
+
+    @property
+    def live_udp_datagrams(self):
+        return self.datagram_counter.count
+
+    def reset_live_network_counts(self):
+        self.portal_server.reset_connections()
+        self.asset_server.reset_connections()
+        self.datagram_counter.reset()
 
     @property
     def asset_url(self):

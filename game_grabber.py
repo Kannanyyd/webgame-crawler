@@ -82,12 +82,18 @@ def run(
     url: str,
     *,
     output_root: Path = PROJECT_DIR,
-    capture_func=capture_game,
-    download_func=download_resources,
-    replay_func=verify_replay,
-    inspect_har_func=inspect_har,
+    capture_func=None,
+    download_func=None,
+    replay_func=None,
+    inspect_har_func=None,
     printer: Callable[[str], None] = safe_print,
 ) -> int:
+    using_default_capture = capture_func is None
+    capture_func = capture_game if capture_func is None else capture_func
+    download_func = download_resources if download_func is None else download_func
+    replay_func = verify_replay if replay_func is None else replay_func
+    inspect_har_func = inspect_har if inspect_har_func is None else inspect_har_func
+
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -100,7 +106,7 @@ def run(
 
     try:
         temp_har.unlink()
-        if capture_func is capture_game:
+        if using_default_capture:
             ensure_browser()
 
         printer(f"Loading: {url}")

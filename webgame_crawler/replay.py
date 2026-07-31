@@ -4,7 +4,12 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .capture import _NetworkActivity, _game_surface_urls, drive_game_page
+from .capture import (
+    _NetworkActivity,
+    _game_surface_urls,
+    _request_frame,
+    drive_game_page,
+)
 from .discovery import is_game_like_resource, is_tracking_url
 from .har import inspect_har
 from .models import CaptureResult, ReplayFailure, ReplaySummary, ResourceRecord
@@ -25,13 +30,6 @@ _STATIC_RESOURCE_TYPES = {
 }
 
 
-def _request_frame_url(request: Any) -> str:
-    try:
-        return request.frame.url
-    except Exception:
-        return ""
-
-
 def is_required_replay_failure(request: Any, capture: CaptureResult) -> bool:
     method = request.method
     url = request.url
@@ -44,8 +42,8 @@ def is_required_replay_failure(request: Any, capture: CaptureResult) -> bool:
         return True
 
     selected_frame_urls = {signal.frame.url for signal in capture.selected_frames}
-    frame_url = _request_frame_url(request)
-    if frame_url not in selected_frame_urls:
+    frame_url, frame_ancestors = _request_frame(request)
+    if selected_frame_urls.isdisjoint((frame_url, *frame_ancestors)):
         return False
     if resource_type in _STATIC_RESOURCE_TYPES:
         return True
@@ -59,7 +57,9 @@ def verify_replay(
     capture: CaptureResult,
     browser_path: str | Path | None = None,
     headless: bool = True,
-    timeout_seconds: float = 20.0,
+    initial_wait_ms: int | None = None,
+    idle_seconds: float | None = None,
+    timeout_seconds: float | None = None,
 ) -> ReplaySummary:
     archive = inspect_har(har_path)
     if not archive.valid:
@@ -79,6 +79,13 @@ def verify_replay(
     reached_game_surface = False
     replay_error: str | None = None
     activity = _NetworkActivity()
+    replay_initial_wait_ms = (
+        capture.initial_wait_ms if initial_wait_ms is None else initial_wait_ms
+    )
+    replay_idle_seconds = capture.idle_seconds if idle_seconds is None else idle_seconds
+    replay_timeout_seconds = (
+        capture.timeout_seconds if timeout_seconds is None else timeout_seconds
+    )
     selected_frame_urls = {signal.frame.url for signal in capture.selected_frames}
     engine_frame_urls = {
         signal.frame.url
@@ -95,6 +102,7 @@ def verify_replay(
                     viewport={"width": 1280, "height": 800},
                     user_agent=capture.user_agent or DEFAULT_USER_AGENT,
                     service_workers="block",
+                    offline=True,
                 )
                 try:
                     context.route_from_har(str(har_path), not_found="abort")
@@ -103,12 +111,14 @@ def verify_replay(
                     def on_request_failed(request: Any) -> None:
                         nonlocal replay_error
                         error = request.failure or "request not found in HAR"
+                        frame_url, frame_ancestors = _request_frame(request)
                         failures.append(
                             ReplayFailure(
                                 url=request.url,
                                 method=request.method,
                                 resource_type=request.resource_type,
-                                frame_url=_request_frame_url(request),
+                                frame_url=frame_url,
+                                frame_ancestors=frame_ancestors,
                                 error=error,
                                 required=is_required_replay_failure(request, capture),
                             )
@@ -134,9 +144,9 @@ def verify_replay(
                             page,
                             capture.requested_url,
                             activity,
-                            initial_wait_ms=250,
-                            idle_seconds=0.5,
-                            timeout_seconds=timeout_seconds,
+                            initial_wait_ms=replay_initial_wait_ms,
+                            idle_seconds=replay_idle_seconds,
+                            timeout_seconds=replay_timeout_seconds,
                         )
                         final_url = page.url
                         canvas_frame_urls = _game_surface_urls(page)
