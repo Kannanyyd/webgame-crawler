@@ -41,6 +41,8 @@ python game_grabber.py "https://example.com/game"
   _crawl/resource-map.json
   _crawl/summary.json
   _crawl/failures.json
+  _crawl/capture.har.zip
+  _crawl/replay-verification.json
 ```
 
 其中：
@@ -48,8 +50,10 @@ python game_grabber.py "https://example.com/game"
 - `resource-map.json` 记录原始 URL 与本地文件路径的映射。
 - `summary.json` 记录游戏上下文、资源数量及传输体积。
 - `failures.json` 记录下载失败的资源和原因。
+- `capture.har.zip` 是带响应体的浏览器会话忠实记录；普通下载目录只是便于查看和后续处理的导出，不能替代该 HAR。
+- `replay-verification.json` 记录在停止原始服务器后基于 HAR 的回放结果。回放不会回退到实时网络，并会列出每个未匹配请求及其 `required` 状态。
 
-程序会区分浏览器实际请求的核心资源和从清单推导出的可选资源。只有核心资源下载失败时，命令才会返回失败状态。
+程序会区分浏览器实际请求的核心资源和从清单推导出的可选资源。只有核心资源下载失败时，命令才会返回失败状态。HAR 包的文件大小本身不能证明捕获完整；应以回放是否完成、未匹配请求和它们的 `required` 状态为准。联机、排行榜、支付等服务端功能仍需依赖原始平台。
 
 ## 测试
 
