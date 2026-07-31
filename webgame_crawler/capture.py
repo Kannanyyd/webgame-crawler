@@ -254,6 +254,42 @@ def _focus_canvas(page: Any):
             continue
 
 
+def drive_game_page(
+    page: Any,
+    url: str,
+    activity: _NetworkActivity,
+    initial_wait_ms: int,
+    idle_seconds: float,
+    timeout_seconds: float,
+) -> tuple[bool, bool]:
+    navigate_page(page, url)
+    page.wait_for_timeout(max(0, initial_wait_ms))
+    has_surface = _wait_for_game_surface(page, min(10.0, timeout_seconds / 2))
+    clicked_start = _click_start_control(page, allow_weak=not has_surface)
+    if not clicked_start and not has_surface:
+        clicked_start = _wait_for_start_control(
+            page,
+            min(5.0, timeout_seconds / 3),
+            allow_weak=True,
+        )
+    if clicked_start or not has_surface:
+        has_surface = _wait_for_game_surface(page, min(5.0, timeout_seconds / 3))
+    if has_surface:
+        activity.focus_frames(_game_surface_urls(page))
+        _focus_canvas(page)
+    minimum_observation = (
+        min(15.0, max(2.0, timeout_seconds / 3)) if clicked_start else 0.5
+    )
+    wait_for_relevant_idle(
+        page,
+        activity,
+        idle_seconds,
+        timeout_seconds,
+        minimum_seconds=minimum_observation,
+    )
+    return clicked_start, has_surface
+
+
 def _should_detect_engine(
     frame_url: str,
     canvas_count: int,
@@ -318,6 +354,7 @@ def capture_game(
     initial_wait_ms: int = 2_000,
     idle_seconds: float = 4.0,
     timeout_seconds: float = 45.0,
+    har_path: str | Path | None = None,
 ) -> CaptureResult:
     if browser_path is not None:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_path)
@@ -330,89 +367,90 @@ def capture_game(
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=headless)
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-            ),
+        existing_user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
         )
-        page = context.new_page()
-
-        def on_request(request):
-            frame_url, ancestors = _request_frame(request)
-            record = ResourceRecord(
-                url=request.url,
-                method=request.method,
-                resource_type=request.resource_type,
-                frame_url=frame_url,
-                frame_ancestors=ancestors,
-                request_headers=dict(request.headers),
+        context_options = {
+            "viewport": {"width": 1280, "height": 800},
+            "user_agent": existing_user_agent,
+            "service_workers": "block",
+        }
+        if har_path is not None:
+            har_file = Path(har_path)
+            har_file.parent.mkdir(parents=True, exist_ok=True)
+            context_options.update(
+                record_har_path=str(har_file),
+                record_har_content="attach",
+                record_har_mode="full",
             )
-            resources.append(record)
-            by_request[id(request)] = record
-            activity.started(request)
-
-        def on_response(response):
-            record = by_request.get(id(response.request))
-            if record is None:
-                return
-            record.status = response.status
-            record.response_headers = dict(response.headers)
+        try:
+            context = browser.new_context(**context_options)
             try:
-                record.encoded_size = int(response.headers.get("content-length", "0"))
-            except ValueError:
-                record.encoded_size = 0
-            if record.resource_type == "document":
-                record.frame_url = response.url
+                page = context.new_page()
 
-        def on_failed(request):
-            record = by_request.get(id(request))
-            if record is not None:
-                record.failure = request.failure or "request failed"
-            activity.finished(request)
+                def on_request(request):
+                    frame_url, ancestors = _request_frame(request)
+                    record = ResourceRecord(
+                        url=request.url,
+                        method=request.method,
+                        resource_type=request.resource_type,
+                        frame_url=frame_url,
+                        frame_ancestors=ancestors,
+                        request_headers=dict(request.headers),
+                    )
+                    resources.append(record)
+                    by_request[id(request)] = record
+                    activity.started(request)
 
-        context.on("request", on_request)
-        context.on("response", on_response)
-        context.on("requestfinished", activity.finished)
-        context.on("requestfailed", on_failed)
+                def on_response(response):
+                    record = by_request.get(id(response.request))
+                    if record is None:
+                        return
+                    record.status = response.status
+                    record.response_headers = dict(response.headers)
+                    try:
+                        record.encoded_size = int(
+                            response.headers.get("content-length", "0")
+                        )
+                    except ValueError:
+                        record.encoded_size = 0
+                    if record.resource_type == "document":
+                        record.frame_url = response.url
 
-        navigate_page(page, url)
-        page.wait_for_timeout(max(0, initial_wait_ms))
-        has_surface = _wait_for_game_surface(page, min(10.0, timeout_seconds / 2))
-        clicked_start = _click_start_control(page, allow_weak=not has_surface)
-        if not clicked_start and not has_surface:
-            clicked_start = _wait_for_start_control(
-                page,
-                min(5.0, timeout_seconds / 3),
-                allow_weak=True,
-            )
-        if clicked_start or not has_surface:
-            has_surface = _wait_for_game_surface(page, min(5.0, timeout_seconds / 3))
-        if has_surface:
-            activity.focus_frames(_game_surface_urls(page))
-            _focus_canvas(page)
-        minimum_observation = (
-            min(15.0, max(2.0, timeout_seconds / 3)) if clicked_start else 0.5
-        )
-        wait_for_relevant_idle(
-            page,
-            activity,
-            idle_seconds,
-            timeout_seconds,
-            minimum_seconds=minimum_observation,
-        )
+                def on_failed(request):
+                    record = by_request.get(id(request))
+                    if record is not None:
+                        record.failure = request.failure or "request failed"
+                    activity.finished(request)
 
-        frames = _snapshot_frames(page, resources)
-        signals = build_frame_signals(frames, resources)
-        selected_frames = select_game_frames(signals)
-        selected_urls = {signal.frame.url for signal in selected_frames}
-        selected_resources = select_game_resources(resources, selected_urls)
-        title = page.title() or "game"
-        final_url = page.url
-        cookies = context.cookies()
-        user_agent = page.evaluate("() => navigator.userAgent")
-        browser.close()
+                context.on("request", on_request)
+                context.on("response", on_response)
+                context.on("requestfinished", activity.finished)
+                context.on("requestfailed", on_failed)
+
+                drive_game_page(
+                    page,
+                    url,
+                    activity,
+                    initial_wait_ms,
+                    idle_seconds,
+                    timeout_seconds,
+                )
+
+                frames = _snapshot_frames(page, resources)
+                signals = build_frame_signals(frames, resources)
+                selected_frames = select_game_frames(signals)
+                selected_urls = {signal.frame.url for signal in selected_frames}
+                selected_resources = select_game_resources(resources, selected_urls)
+                title = page.title() or "game"
+                final_url = page.url
+                cookies = context.cookies()
+                user_agent = page.evaluate("() => navigator.userAgent")
+            finally:
+                context.close()
+        finally:
+            browser.close()
 
     return CaptureResult(
         requested_url=url,

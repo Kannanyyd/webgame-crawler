@@ -1,8 +1,10 @@
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 from tests.fixtures.game_site import GameFixture
+from webgame_crawler.har import inspect_har
 from webgame_crawler.capture import (
     _NetworkActivity,
     _should_detect_engine,
@@ -12,6 +14,25 @@ from webgame_crawler.capture import (
 
 
 class CaptureTests(unittest.TestCase):
+    def test_capture_writes_full_har_with_attached_bodies(self):
+        browser_path = Path(__file__).resolve().parents[1] / ".pw-browsers"
+        with tempfile.TemporaryDirectory() as temp_dir, GameFixture() as fixture:
+            har_path = Path(temp_dir) / "capture.har.zip"
+            capture_game(
+                fixture.url,
+                browser_path=browser_path,
+                headless=True,
+                initial_wait_ms=250,
+                idle_seconds=0.5,
+                timeout_seconds=8,
+                har_path=har_path,
+            )
+            archive = inspect_har(har_path)
+
+        self.assertTrue(archive.valid, archive.error)
+        self.assertGreater(archive.entry_count, 0)
+        self.assertGreater(archive.body_count, 0)
+
     def test_engine_detection_skips_blank_and_low_traffic_frames(self):
         self.assertFalse(_should_detect_engine("about:blank", 0, 0, 0))
         self.assertFalse(
