@@ -88,3 +88,50 @@ class DownloadSummary:
     @property
     def encoded_bytes(self) -> int:
         return sum(result.bytes_written for result in self.results if result.ok)
+
+
+@dataclass(slots=True)
+class HarArchiveInfo:
+    path: Path
+    valid: bool
+    size: int = 0
+    entry_count: int = 0
+    body_count: int = 0
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class ReplayFailure:
+    url: str
+    method: str = "GET"
+    resource_type: str = "other"
+    frame_url: str = ""
+    error: str = "request not found in HAR"
+    required: bool = False
+
+
+@dataclass(slots=True)
+class ReplaySummary:
+    archive: HarArchiveInfo
+    requested_url: str
+    final_url: str = ""
+    reached_game_surface: bool = False
+    failures: list[ReplayFailure] = field(default_factory=list)
+    error: str | None = None
+
+    @property
+    def failed(self) -> int:
+        return len(self.failures)
+
+    @property
+    def required_failed(self) -> int:
+        return sum(1 for failure in self.failures if failure.required)
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.archive.valid
+            and self.error is None
+            and self.reached_game_surface
+            and self.required_failed == 0
+        )
