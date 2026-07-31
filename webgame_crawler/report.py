@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .models import CaptureResult, DownloadSummary, ResourceRecord
+from .models import CaptureResult, DownloadSummary, ReplaySummary, ResourceRecord
 
 
 def _integer_header(resource: ResourceRecord, name: str) -> int:
@@ -18,6 +18,7 @@ def write_reports(
     resources: list[ResourceRecord],
     downloads: DownloadSummary,
     output_dir: Path,
+    replay: ReplaySummary | None = None,
 ) -> dict:
     crawl_dir = output_dir / "_crawl"
     crawl_dir.mkdir(parents=True, exist_ok=True)
@@ -73,6 +74,10 @@ def write_reports(
             _integer_header(resource, "x-amz-meta-uncompressed-length")
             for resource in resources
         ),
+        "harBytes": replay.archive.size if replay is not None else 0,
+        "replayComplete": replay.complete if replay is not None else None,
+        "replayFailed": replay.failed if replay is not None else 0,
+        "replayRequiredFailed": replay.required_failed if replay is not None else 0,
     }
 
     (crawl_dir / "resource-map.json").write_text(
@@ -84,4 +89,32 @@ def write_reports(
     (crawl_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    if replay is not None:
+        replay_verification = {
+            "archive": str(replay.archive.path),
+            "archiveValid": replay.archive.valid,
+            "archiveError": replay.archive.error,
+            "requestedUrl": replay.requested_url,
+            "finalUrl": replay.final_url,
+            "reachedGameSurface": replay.reached_game_surface,
+            "complete": replay.complete,
+            "failed": replay.failed,
+            "requiredFailed": replay.required_failed,
+            "error": replay.error,
+            "failures": [
+                {
+                    "url": failure.url,
+                    "method": failure.method,
+                    "type": failure.resource_type,
+                    "frameUrl": failure.frame_url,
+                    "error": failure.error,
+                    "required": failure.required,
+                }
+                for failure in replay.failures
+            ],
+        }
+        (crawl_dir / "replay-verification.json").write_text(
+            json.dumps(replay_verification, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     return summary

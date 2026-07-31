@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Callable, TextIO
 from urllib.parse import urlparse
@@ -17,8 +18,10 @@ from webgame_crawler.download import (
     fetch_text,
     probe_resource_urls,
 )
+from webgame_crawler.har import inspect_har, install_har
 from webgame_crawler.manifests import supplement_resources
-from webgame_crawler.models import CaptureResult, DownloadSummary
+from webgame_crawler.models import CaptureResult, DownloadSummary, ReplaySummary
+from webgame_crawler.replay import verify_replay
 from webgame_crawler.report import write_reports
 
 
@@ -81,52 +84,108 @@ def run(
     output_root: Path = PROJECT_DIR,
     capture_func=capture_game,
     download_func=download_resources,
+    replay_func=verify_replay,
+    inspect_har_func=inspect_har,
     printer: Callable[[str], None] = safe_print,
 ) -> int:
-    if capture_func is capture_game:
-        ensure_browser()
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix="webgame-",
+        suffix=".har.zip",
+        dir=output_root,
+        delete=False,
+    ) as placeholder:
+        temp_har = Path(placeholder.name)
 
-    printer(f"Loading: {url}")
-    capture = capture_func(url, browser_path=PW_BROWSERS_PATH, headless=True)
-    _print_capture_summary(capture, printer)
-    if not capture.selected_frames or not capture.selected_resources:
-        return 2
+    try:
+        temp_har.unlink()
+        if capture_func is capture_game:
+            ensure_browser()
 
-    session = build_session(capture.cookies, capture.user_agent)
-    frame_engines = {
-        signal.frame.url: signal.frame.engine for signal in capture.selected_frames
-    }
-    supplemental = supplement_resources(
-        capture.selected_resources,
-        frame_engines,
-        lambda source_url, headers: fetch_text(session, source_url, headers),
-        probe_urls=lambda urls, headers: probe_resource_urls(session, urls, headers),
-    )
-    resources = capture.selected_resources + supplemental
+        printer(f"Loading: {url}")
+        capture = capture_func(
+            url,
+            browser_path=PW_BROWSERS_PATH,
+            headless=True,
+            har_path=temp_har,
+        )
+        _print_capture_summary(capture, printer)
+        if not capture.selected_frames or not capture.selected_resources:
+            return 2
 
-    game_name = safe_game_name(capture.title)
-    output_dir = output_root / game_name
-    main_host = urlparse(capture.selected_frames[0].frame.url).netloc
-    printer(
-        f"Included resources: {len(resources)} "
-        f"(browser={len(capture.selected_resources)}, manifest={len(supplemental)})"
-    )
-    downloads: DownloadSummary = download_func(
-        resources,
-        capture.cookies,
-        output_dir,
-        main_host,
-        user_agent=capture.user_agent,
-    )
-    summary = write_reports(capture, resources, downloads, output_dir)
-    printer(
-        f"Downloaded={summary['downloaded']} Failed={summary['failed']} "
-        f"Required failed={summary['requiredFailed']} "
-        f"Encoded={summary['encodedBytes'] / 1024 / 1024:.2f} MB "
-        f"Known decoded={summary['knownDecodedBytes'] / 1024 / 1024:.2f} MB"
-    )
-    printer(f"Output: {output_dir}")
-    return 1 if downloads.required_failed else 0
+        session = build_session(capture.cookies, capture.user_agent)
+        frame_engines = {
+            signal.frame.url: signal.frame.engine for signal in capture.selected_frames
+        }
+        supplemental = supplement_resources(
+            capture.selected_resources,
+            frame_engines,
+            lambda source_url, headers: fetch_text(session, source_url, headers),
+            probe_urls=lambda urls, headers: probe_resource_urls(session, urls, headers),
+        )
+        resources = capture.selected_resources + supplemental
+
+        game_name = safe_game_name(capture.title)
+        output_dir = output_root / game_name
+        intended_har = output_dir / "_crawl" / "capture.har.zip"
+        try:
+            installed_har = install_har(temp_har, output_dir)
+        except OSError as error:
+            archive = inspect_har_func(intended_har)
+            archive.valid = False
+            archive.error = str(error)
+            replay = ReplaySummary(
+                archive=archive,
+                requested_url=capture.requested_url,
+                error=str(error),
+            )
+        else:
+            archive = inspect_har_func(installed_har)
+            if archive.valid:
+                replay = replay_func(
+                    installed_har,
+                    capture,
+                    browser_path=PW_BROWSERS_PATH,
+                    headless=True,
+                )
+            else:
+                replay = ReplaySummary(
+                    archive=archive,
+                    requested_url=capture.requested_url,
+                    error=archive.error,
+                )
+
+        main_host = urlparse(capture.selected_frames[0].frame.url).netloc
+        printer(
+            f"Included resources: {len(resources)} "
+            f"(browser={len(capture.selected_resources)}, manifest={len(supplemental)})"
+        )
+        downloads: DownloadSummary = download_func(
+            resources,
+            capture.cookies,
+            output_dir,
+            main_host,
+            user_agent=capture.user_agent,
+        )
+        summary = write_reports(capture, resources, downloads, output_dir, replay)
+        printer(
+            f"Downloaded={summary['downloaded']} Failed={summary['failed']} "
+            f"Required failed={summary['requiredFailed']} "
+            f"Encoded={summary['encodedBytes'] / 1024 / 1024:.2f} MB "
+            f"Known decoded={summary['knownDecodedBytes'] / 1024 / 1024:.2f} MB"
+        )
+        printer(
+            f"Replay complete={summary['replayComplete']} "
+            f"Failed={summary['replayFailed']} "
+            f"Required failed={summary['replayRequiredFailed']} "
+            f"HAR={summary['harBytes'] / 1024 / 1024:.2f} MB"
+        )
+        printer(f"Output: {output_dir}")
+        return 1 if downloads.required_failed > 0 or not replay.complete else 0
+    finally:
+        if temp_har.exists():
+            temp_har.unlink()
 
 
 def main(argv: list[str] | None = None) -> int:
