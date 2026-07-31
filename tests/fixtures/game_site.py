@@ -76,11 +76,16 @@ class GameFixture:
                 if self.path == "/portal":
                     self._html(
                         "<title>Fixture Game</title>"
+                        "<script>fetch('/analytics?nonce=' + crypto.randomUUID())</script>"
                         "<button onclick=\"fetch('/video-player')\">Play</button>"
                         "<button onclick=\"document.getElementById('game-frame').contentWindow.postMessage('start', '*')\">Play game</button>"
                         "<iframe src='/ad?url=https%3A%2F%2Fgames.example%2Findex.html'></iframe>"
                         "<iframe id='game-frame' src='/game'></iframe>"
                     )
+                    return
+                if self.path.startswith("/analytics?nonce="):
+                    self.send_response(204)
+                    self.end_headers()
                     return
                 if self.path == "/delayed-portal":
                     self._html(
