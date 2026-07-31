@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import warnings
 import zipfile
 
 from webgame_crawler.har import inspect_har
@@ -55,6 +56,31 @@ class HarInspectionTests(unittest.TestCase):
 
         self.assertFalse(result.valid)
         self.assertIn("resources/body.bin", result.error)
+
+    def test_inspect_har_rejects_invalid_har_encoding(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "capture.har.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("har.har", b"\x80")
+
+            result = inspect_har(path)
+
+        self.assertFalse(result.valid)
+        self.assertIsNotNone(result.error)
+
+    def test_inspect_har_rejects_duplicate_har_members(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "capture.har.zip"
+            _write_har_zip(path)
+            with zipfile.ZipFile(path, "a") as archive:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    archive.writestr("har.har", archive.read("har.har"))
+
+            result = inspect_har(path)
+
+        self.assertFalse(result.valid)
+        self.assertIn("exactly one .har member", result.error)
 
 
 if __name__ == "__main__":
